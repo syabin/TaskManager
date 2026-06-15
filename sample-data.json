@@ -1,0 +1,87 @@
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "projectName": "PRJ-2024-001",
+      "taskName": "需求文档编写",
+      "startDate": "2024-06-01",
+      "plannedEndDate": "2024-06-15",
+      "status": "已延期",
+      "delayRecords": [
+        {
+          "id": "d1",
+          "date": "2024-06-10",
+          "delayHours": 3,
+          "newEndDate": "2024-06-18",
+          "causedByTempItemId": "tmp1",
+          "reason": "客户临时会议，需求讨论"
+        }
+      ],
+      "currentEndDate": "2024-06-18"
+    },
+    {
+      "id": "t2",
+      "projectName": "PRJ-2024-001",
+      "taskName": "前端页面开发",
+      "startDate": "2024-06-10",
+      "plannedEndDate": "2024-06-25",
+      "status": "进行中",
+      "delayRecords": [
+        {
+          "id": "d2",
+          "date": "2024-06-12",
+          "delayHours": 4,
+          "newEndDate": "2024-06-27",
+          "causedByTempItemId": "tmp2",
+          "reason": "紧急BUG修复"
+        }
+      ],
+      "currentEndDate": "2024-06-27"
+    },
+    {
+      "id": "t3",
+      "projectName": "PRJ-2024-002",
+      "taskName": "接口联调",
+      "startDate": "2024-06-05",
+      "plannedEndDate": "2024-06-20",
+      "status": "未开始",
+      "delayRecords": [],
+      "currentEndDate": "2024-06-20"
+    },
+    {
+      "id": "t4",
+      "projectName": "PRJ-2024-002",
+      "taskName": "测试用例编写",
+      "startDate": "2024-06-08",
+      "plannedEndDate": "2024-06-22",
+      "status": "已完成",
+      "delayRecords": [],
+      "currentEndDate": "2024-06-22"
+    }
+  ],
+  "tempItems": [
+    {
+      "id": "tmp1",
+      "date": "2024-06-10",
+      "durationValue": 2,
+      "durationUnit": "h",
+      "description": "客户临时会议 - 讨论新增需求",
+      "impactType": "all",
+      "affectedTaskIds": [
+        "t1",
+        "t2"
+      ]
+    },
+    {
+      "id": "tmp2",
+      "date": "2024-06-12",
+      "durationValue": 4.0,
+      "durationUnit": "h",
+      "description": "紧急BUG修复 - 生产环境问题",
+      "impactType": "specific",
+      "affectedTaskIds": [
+        "t2"
+      ]
+    }
+  ]
+}

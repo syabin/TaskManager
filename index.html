@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目任务与临时事项管理</title>
+<style>
+:root {
+  --primary: #1a73e8;
+  --primary-dark: #1557b0;
+  --danger: #dc3545;
+  --danger-dark: #b02a37;
+  --secondary: #6c757d;
+  --secondary-dark: #565e64;
+  --success: #198754;
+  --success-bg: #d1e7dd;
+  --success-text: #0f5132;
+  --warning-bg: #fff3cd;
+  --info-bg: #cfe2ff;
+  --info-text: #084298;
+  --danger-bg-light: #f8d7da;
+  --danger-text-light: #842029;
+  --bg: #f0f2f5;
+  --bg-white: #ffffff;
+  --bg-light: #f8f9fa;
+  --bg-muted: #e9ecef;
+  --bg-primary-light: #e8f0fe;
+  --text: #333;
+  --text-secondary: #666;
+  --text-muted: #999;
+  --border: #ddd;
+  --border-light: #eee;
+  --shadow: rgba(0,0,0,0.1);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); scrollbar-gutter: stable; }
+.app-header { background: var(--primary); color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+.app-header h1 { font-size: 20px; font-weight: 600; }
+.tab-bar { display: flex; background: var(--bg-white); border-bottom: 1px solid var(--border); padding: 0 24px; }
+.tab-btn { padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 3px solid transparent; transition: all 0.2s; }
+.tab-btn:hover { color: var(--primary); }
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.tab-content { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+.tab-content.active { display: block; }
+
+.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-danger { background: var(--danger); color: white; }
+.btn-danger:hover { background: var(--danger-dark); }
+.btn-secondary { background: var(--secondary); color: white; }
+.btn-secondary:hover { background: var(--secondary-dark); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-outline { background: var(--bg-white); border: 1px solid var(--border); color: var(--text); }
+.btn-outline:hover { background: var(--bg-light); }
+
+.card { background: var(--bg-white); border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px var(--shadow); }
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.card-title { font-size: 16px; font-weight: 600; }
+
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.form-group { display: flex; flex-direction: column; flex: 1; min-width: 150px; }
+.form-group label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 500; }
+.form-group input, .form-group select, .form-group textarea { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; transition: border 0.2s; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--primary); }
+
+table { width: 100%; border-collapse: collapse; }
+th { background: var(--bg-light); padding: 10px 12px; text-align: left; font-size: 12px; color: var(--text-secondary); font-weight: 600; border-bottom: 2px solid var(--border); white-space: nowrap; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border-light); font-size: 13px; vertical-align: middle; }
+tr:hover { background: var(--bg-light); }
+
+.status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.status-not-started { background: var(--bg-muted); color: #495057; }
+.status-in-progress { background: var(--info-bg); color: var(--info-text); }
+.status-completed { background: var(--success-bg); color: var(--success-text); }
+.status-delayed { background: var(--danger-bg-light); color: var(--danger-text-light); }
+
+.delay-link { color: var(--primary); cursor: pointer; text-decoration: underline; }
+.delay-link:hover { color: var(--primary-dark); }
+
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: var(--bg-white); border-radius: 12px; padding: 24px; max-width: 700px; width: 90%; max-height: 80vh; overflow-y: auto; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.modal-header h3 { font-size: 18px; }
+.modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text-secondary); }
+.modal-close:hover { color: var(--text); }
+
+.filter-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: flex-end; }
+.filter-bar .form-group { min-width: 120px; }
+
+.timeline { border-left: 3px solid var(--primary); padding-left: 16px; margin-left: 8px; }
+.timeline-item { position: relative; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed var(--border-light); }
+.timeline-item:last-child { border-bottom: none; }
+.timeline-item::before { content: ''; position: absolute; left: -22px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
+.timeline-date { font-size: 12px; color: var(--text-muted); }
+.timeline-desc { font-size: 13px; margin-top: 4px; }
+
+.project-group { margin-bottom: 20px; }
+.project-group table { table-layout: fixed; }
+.project-group th:nth-child(1) { width: 200px; }
+.project-group th:nth-child(2),
+.project-group th:nth-child(3),
+.project-group th:nth-child(4) { width: 110px; }
+.project-group th:nth-child(5) { width: 70px; }
+.project-group th:nth-child(6) { width: 80px; }
+.project-group th:nth-child(7) { width: 130px; }
+.project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid var(--bg-primary-light); }
+
+.empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
+.empty-state p { margin-bottom: 12px; }
+
+.task-name-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
+
+.checkbox-group { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.checkbox-group label { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; font-size: 13px; }
+.checkbox-group label:hover { background: var(--bg-light); }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: var(--bg-white); border-radius: 8px; padding: 16px; text-align: center; box-shadow: 0 1px 3px var(--shadow); }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--primary); }
+.stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+.task-select-list { max-height: 300px; overflow-y: auto; }
+.task-select-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.task-select-item:hover { background: var(--bg-light); }
+
+.import-preview { max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 12px; }
+.import-preview table { font-size: 12px; }
+.import-preview th, .import-preview td { padding: 6px 8px; }
+.import-row-error { background: var(--warning-bg); }
+.import-row-ok { background: var(--success-bg); }
+.import-format-help { background: var(--bg-light); padding: 12px; border-radius: 6px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.8; }
+.import-format-help code { background: var(--bg-muted); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+
+/* Excel-style dropdown filter */
+.dropdown-filter { position: relative; display: inline-block; }
+.dropdown-trigger {
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-white); font-size: 14px; cursor: pointer; min-width: 140px;
+  text-align: left; position: relative; user-select: none;
+}
+.dropdown-trigger::after {
+  content: ''; position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  border: 5px solid transparent; border-top-color: var(--text-secondary);
+}
+.dropdown-panel {
+  display: none; position: absolute; top: 100%; left: 0; z-index: 500;
+  background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12); padding: 8px 0; min-width: 200px; max-height: 260px; overflow-y: auto;
+}
+.dropdown-filter.open .dropdown-panel { display: block; }
+.dropdown-item {
+  padding: 6px 16px 6px 36px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 8px; position: relative;
+}
+.dropdown-item:hover { background: var(--bg-light); }
+.dropdown-item::before {
+  content: ''; position: absolute; left: 12px; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-radius: 3px; background: var(--bg-white);
+}
+.dropdown-item.checked::before {
+  background: var(--primary); border-color: var(--primary);
+}
+.dropdown-item.checked::after {
+  content: ''; position: absolute; left: 16px; top: 10px; width: 5px; height: 9px;
+  border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.dropdown-actions { border-top: 1px solid var(--border-light); padding: 6px 12px; display: flex; gap: 8px; }
+.dropdown-actions button { flex: 1; font-size: 12px; padding: 4px 0; }
+
+/* Toast notification */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 12px 20px; border-radius: 8px; font-size: 14px; color: white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: toast-in 0.3s ease, toast-out 0.3s ease 2.5s forwards; pointer-events: auto; }
+.toast-success { background: var(--success); }
+.toast-error { background: var(--danger); }
+.toast-info { background: var(--primary); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes toast-out { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toastContainer"></div>
+<div class="app-header">
+  <h1>项目任务与临时事项管理</h1>
+  <span id="dataStatus" style="font-size:12px; opacity:0.8;"></span>
+</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('tasks')">任务管理</button>
+  <button class="tab-btn" onclick="switchTab('temp')">临时事项</button>
+  <button class="tab-btn" onclick="switchTab('review')">审阅</button>
+  <button class="tab-btn" onclick="switchTab('data')">数据管理</button>
+</div>
+
+<!-- Tab 1: 任务管理 -->
+<div id="tab-tasks" class="tab-content active">
+  <div class="stats-grid" id="taskStats"></div>
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">待办任务</span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-secondary" onclick="showBatchImport()">批量导入</button>
+        <button class="btn btn-primary" onclick="showTaskForm()">+ 新建任务</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <div class="form-group">
+        <label>项目筛选</label>
+        <div class="dropdown-filter" id="filterProject"></div>
+      </div>
+      <div class="form-group">
+        <label>状态筛选</label>
+        <div class="dropdown-filter" id="filterStatus"></div>
+      </div>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text);">
+          <input type="checkbox" id="hideCompletedProjects" checked onchange="renderTasks()"> 隐藏已完成项目
+        </label>
+      </div>
+    </div>
+    <div id="taskList"></div>
+  </div>
+</div>
+
+<!-- Tab 2: 临时事项 -->
+<div id="tab-temp" class="tab-content">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">临时事项</span>
+      <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
+    </div>
+    <div id="tempList"></div>
+  </div>
+</div>
+
+<!-- Tab 3: 审阅 -->
+<div id="tab-review" class="tab-content">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">任务审阅</span>
+    </div>
+    <div class="filter-bar">
+      <div class="form-group">
+        <label>项目筛选</label>
+        <div class="dropdown-filter" id="reviewFilterProject"></div>
+      </div>
+      <div class="form-group">
+        <label>仅查看有延期的任务</label>
+        <select id="reviewFilterDelayed" onchange="renderReview()">
+          <option value="">全部</option>
+          <option value="yes">有延期</option>
+        </select>
+      </div>
+    </div>
+    <div id="reviewList"></div>
+  </div>
+</div>
+
+<!-- Tab 4: 数据管理 -->
+<div id="tab-data" class="tab-content">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">数据管理</span>
+    </div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="exportData()">导出数据 (JSON)</button>
+      <label class="btn btn-secondary" style="cursor:pointer;">
+        导入数据 (JSON)
+        <input type="file" accept=".json" onchange="importData(event)" style="display:none;">
+      </label>
+      <button class="btn btn-danger" onclick="clearAllData()">清空所有数据</button>
+    </div>
+    <div style="margin-top:16px; font-size:13px; color:#666;">
+      <p>当前数据量：<span id="dataCount"></span></p>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModalOverlay(event)">
+  <div class="modal" id="modalContent"></div>
+</div>
+
+<script>
+// ====== Data Layer ======
+const STORAGE_KEY = 'task-temp-manager';
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { tasks: [], tempItems: [] };
+    return JSON.parse(raw);
+  } catch { return { tasks: [], tempItems: [] }; }
+}
+
+function saveData(data) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  updateDataStatus();
+}
+
+function updateDataStatus() {
+  const data = loadData();
+  document.getElementById('dataStatus').textContent = `任务 ${data.tasks.length} 条 | 临时事项 ${data.tempItems.length} 条`;
+  document.getElementById('dataCount').textContent = `${data.tasks.length} 条任务，${data.tempItems.length} 条临时事项`;
+}
+
+function genId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+}
+function showToast(msg, type) {
+  type = type || 'success';
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(function() { el.remove(); }, 3000);
+}
+
+
+function formatDate(d) {
+  if (!d) return '-';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  try {
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return d;
+    return date.toISOString().split('T')[0];
+  } catch { return d; }
+}
+
+function addDays(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+// ====== Holiday & Working Day Logic ======
+// 数据来源: https://github.com/NateScarlet/holiday-cn (自动抓取国务院公告)
+const HOLIDAY_API_BASE = 'https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master';
+const CURRENT_YEAR = new Date().getFullYear();
+const HOLIDAY_YEARS = Array.from({length: 8}, (_, i) => CURRENT_YEAR - 2 + i);
+
+// 本地 fallback 数据 (2024-2026 为官方数据, 2027-2030 为预估)
+const HOLIDAYS_FALLBACK = new Set([
+  // 2024
+  '2024-01-01',
+  '2024-02-10','2024-02-11','2024-02-12','2024-02-13','2024-02-14','2024-02-15','2024-02-16','2024-02-17',
+  '2024-04-04','2024-04-05','2024-04-06',
+  '2024-05-01','2024-05-02','2024-05-03','2024-05-04','2024-05-05',
+  '2024-06-10',
+  '2024-09-15','2024-09-16','2024-09-17',
+  '2024-10-01','2024-10-02','2024-10-03','2024-10-04','2024-10-05','2024-10-06','2024-10-07',
+  // 2025
+  '2025-01-01',
+  '2025-01-28','2025-01-29','2025-01-30','2025-01-31','2025-02-01','2025-02-02','2025-02-03','2025-02-04',
+  '2025-04-04','2025-04-05','2025-04-06',
+  '2025-05-01','2025-05-02','2025-05-03','2025-05-04','2025-05-05',
+  '2025-05-31','2025-06-01','2025-06-02',
+  '2025-10-01','2025-10-02','2025-10-03','2025-10-04','2025-10-05','2025-10-06','2025-10-07','2025-10-08',
+  // 2026
+  '2026-01-01','2026-01-02','2026-01-03',
+  '2026-02-15','2026-02-16','2026-02-17','2026-02-18','2026-02-19','2026-02-20','2026-02-21',
+  '2026-04-04','2026-04-05','2026-04-06',
+  '2026-05-01','2026-05-02','2026-05-03','2026-05-04','2026-05-05',
+  '2026-06-19','2026-06-20','2026-06-21',
+  '2026-09-25','2026-09-26','2026-09-27',
+  '2026-10-01','2026-10-02','2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07',
+  // 2027-2030 预估 (以国务院发布为准)
+  '2027-01-01',
+  '2027-02-06','2027-02-07','2027-02-08','2027-02-09','2027-02-10','2027-02-11','2027-02-12',
+  '2027-04-05','2027-04-06','2027-04-07',
+  '2027-05-01','2027-05-02','2027-05-03',
+  '2027-06-09','2027-06-10','2027-06-11',
+  '2027-09-15','2027-09-16','2027-09-17',
+  '2027-10-01','2027-10-02','2027-10-03','2027-10-04','2027-10-05','2027-10-06','2027-10-07',
+  '2028-01-01',
+  '2028-01-26','2028-01-27','2028-01-28','2028-01-29','2028-01-30','2028-01-31','2028-02-01',
+  '2028-04-04','2028-04-05','2028-04-06',
+  '2028-05-01','2028-05-02','2028-05-03',
+  '2028-05-28','2028-05-29','2028-05-30',
+  '2028-10-01','2028-10-02','2028-10-03','2028-10-04','2028-10-05','2028-10-06','2028-10-07',
+  '2029-01-01',
+  '2029-02-13','2029-02-14','2029-02-15','2029-02-16','2029-02-17','2029-02-18','2029-02-19',
+  '2029-04-05','2029-04-06','2029-04-07',
+  '2029-05-01','2029-05-02','2029-05-03',
+  '2029-06-16','2029-06-17','2029-06-18',
+  '2029-09-22','2029-09-23','2029-09-24',
+  '2029-10-01','2029-10-02','2029-10-03','2029-10-04','2029-10-05','2029-10-06','2029-10-07',
+  '2030-01-01',
+  '2030-02-03','2030-02-04','2030-02-05','2030-02-06','2030-02-07','2030-02-08','2030-02-09',
+  '2030-04-05','2030-04-06','2030-04-07',
+  '2030-05-01','2030-05-02','2030-05-03',
+  '2030-06-05','2030-06-06','2030-06-07',
+  '2030-09-12','2030-09-13','2030-09-14',
+  '2030-10-01','2030-10-02','2030-10-03','2030-10-04','2030-10-05','2030-10-06','2030-10-07'
+]);
+
+const MAKEUP_WORKDAYS_FALLBACK = new Set([
+  '2024-02-04','2024-02-18','2024-04-07','2024-04-28','2024-05-11','2024-09-14','2024-09-29','2024-10-12',
+  '2025-01-26','2025-02-08','2025-04-27','2025-09-28','2025-10-11',
+  '2026-02-14','2026-02-28','2026-05-09','2026-09-20','2026-10-10'
+]);
+
+// 运行时数据 (从 API 加载或使用 fallback)
+let HOLIDAYS = new Set(HOLIDAYS_FALLBACK);
+let MAKEUP_WORKDAYS = new Set(MAKEUP_WORKDAYS_FALLBACK);
+let holidaysLoaded = false;
+
+// 从 CDN 加载官方节假日数据
+async function loadHolidaysFromAPI() {
+  const allHolidays = new Set();
+  const allMakeup = new Set();
+
+  for (const year of HOLIDAY_YEARS) {
+    try {
+      const resp = await fetch(`${HOLIDAY_API_BASE}/${year}.json`);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      if (!data.days || data.days.length === 0) continue;
+
+      for (const day of data.days) {
+        if (day.isOffDay) {
+          allHolidays.add(day.date);
+        } else {
+          allMakeup.add(day.date);
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to load holidays for ${year}:`, e);
+    }
+  }
+
+  if (allHolidays.size > 0) {
+    HOLIDAYS = allHolidays;
+    MAKEUP_WORKDAYS = allMakeup;
+    holidaysLoaded = true;
+    console.log('节假日数据已从国务院公告加载');
+  }
+}
+
+function isWorkingDay(dateStr) {
+  if (HOLIDAYS.has(dateStr)) return false;
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  if (day === 0 || day === 6) {
+    return MAKEUP_WORKDAYS.has(dateStr);
+  }
+  return true;
+}
+
+function nextWorkingDay(dateStr) {
+  let d = new Date(dateStr);
+  do { d.setDate(d.getDate() + 1); } while (!isWorkingDay(d.toISOString().split('T')[0]));
+  return d.toISOString().split('T')[0];
+}
+
+// Convert accumulated hours to working day offset
+// Rule: first 2h → push to next working day; then every 8h → +1 working day
+function hoursToWorkingDaysOffset(hours) {
+  if (hours <= 0) return 0;
+  if (hours <= 2) return 1;
+  return 1 + Math.floor((hours - 2) / 8);
+}
+
+// Add working days to a date (skipping weekends and holidays)
+function addWorkingDays(dateStr, workDays) {
+  if (!workDays || workDays <= 0) return dateStr;
+  let d = new Date(dateStr);
+  let count = 0;
+  while (count < workDays) {
+    d.setDate(d.getDate() + 1);
+    if (isWorkingDay(d.toISOString().split('T')[0])) count++;
+  }
+  return d.toISOString().split('T')[0];
+}
+
+// ====== Tab Switching ======
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelectorAll('.tab-btn')[['tasks','temp','review','data'].indexOf(name)].classList.add('active');
+  if (name === 'tasks') renderTasks();
+  if (name === 'temp') renderTempItems();
+  if (name === 'review') renderReview();
+  if (name === 'data') updateDataStatus();
+}
+
+// ====== Modal ======
+function openModal(html) {
+  document.getElementById('modalContent').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('active');
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+}
+function closeModalOverlay(e) {
+  if (e.target === e.currentTarget) { _pendingDelayModalTaskId = null; closeModal(); }
+}
+
+// ====== Excel-Style Dropdown Filter ======
+function initDropdown(containerId, items, selectedValues) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  selectedValues = selectedValues || [];
+  var summary = selectedValues.length === 0 ? '全部' : selectedValues.length + '项已选';
+  container.innerHTML = '';
+  container.dataset.selected = JSON.stringify(selectedValues);
+
+  var trigger = document.createElement('div');
+  trigger.className = 'dropdown-trigger';
+  trigger.textContent = summary;
+  trigger.title = selectedValues.length > 0 ? selectedValues.join(', ') : '全部';
+  trigger.onclick = function(e) { e.stopPropagation(); toggleDropdown(containerId); };
+  container.appendChild(trigger);
+
+  var panel = document.createElement('div');
+  panel.className = 'dropdown-panel';
+
+  items.forEach(function(item) {
+    var div = document.createElement('div');
+    div.className = 'dropdown-item' + (selectedValues.indexOf(item) >= 0 ? ' checked' : '');
+    div.textContent = item;
+    div.onclick = function(e) {
+      e.stopPropagation();
+      toggleDropdownItem(containerId, item);
+    };
+    panel.appendChild(div);
+  });
+
+  // Action buttons
+  var actions = document.createElement('div');
+  actions.className = 'dropdown-actions';
+  var selectAllBtn = document.createElement('button');
+  selectAllBtn.className = 'btn btn-sm btn-outline';
+  selectAllBtn.textContent = '全选';
+  selectAllBtn.onclick = function(e) { e.stopPropagation(); selectAllDropdown(containerId, items); };
+  actions.appendChild(selectAllBtn);
+
+  var clearBtn = document.createElement('button');
+  clearBtn.className = 'btn btn-sm btn-outline';
+  clearBtn.textContent = '清除';
+  clearBtn.onclick = function(e) { e.stopPropagation(); clearDropdown(containerId, items); };
+  actions.appendChild(clearBtn);
+  panel.appendChild(actions);
+
+  container.appendChild(panel);
+}
+
+function getDropdownValues(containerId) {
+  var container = document.getElementById(containerId);
+  if (!container || !container.dataset.selected) return [];
+  try { return JSON.parse(container.dataset.selected); }
+  catch(e) { return []; }
+}
+
+function toggleDropdown(containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  var isOpen = container.classList.contains('open');
+  // Close all dropdowns first
+  document.querySelectorAll('.dropdown-filter.open').forEach(function(d) { d.classList.remove('open'); });
+  if (!isOpen) container.classList.add('open');
+}
+
+function toggleDropdownItem(containerId, value) {
+  var container = document.getElementById(containerId);
+  var selected = getDropdownValues(containerId);
+  var idx = selected.indexOf(value);
+  if (idx >= 0) selected.splice(idx, 1);
+  else selected.push(value);
+  container.dataset.selected = JSON.stringify(selected);
+
+  // Update summary
+  var trigger = container.querySelector('.dropdown-trigger');
+  trigger.textContent = selected.length === 0 ? '全部' : selected.length + '项已选';
+  trigger.title = selected.length > 0 ? selected.join(', ') : '全部';
+
+  // Update check marks
+  var items = container.querySelectorAll('.dropdown-item');
+  items.forEach(function(el) {
+    el.classList.toggle('checked', selected.indexOf(el.textContent) >= 0);
+  });
+
+  // Trigger re-render based on page
+  if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
+  else if (containerId === 'reviewFilterProject') renderReview();
+}
+
+function selectAllDropdown(containerId, allItems) {
+  var container = document.getElementById(containerId);
+  container.dataset.selected = JSON.stringify(allItems.slice());
+  var trigger = container.querySelector('.dropdown-trigger');
+  trigger.textContent = allItems.length + '项已选';
+  trigger.title = allItems.join(', ');
+  container.querySelectorAll('.dropdown-item').forEach(function(el) {
+    el.classList.add('checked');
+  });
+  if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
+  else if (containerId === 'reviewFilterProject') renderReview();
+}
+
+function clearDropdown(containerId, allItems) {
+  var container = document.getElementById(containerId);
+  container.dataset.selected = '[]';
+  var trigger = container.querySelector('.dropdown-trigger');
+  trigger.textContent = '全部';
+  trigger.title = '全部';
+  container.querySelectorAll('.dropdown-item').forEach(function(el) {
+    el.classList.remove('checked');
+  });
+  if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
+  else if (containerId === 'reviewFilterProject') renderReview();
+}
+
+// Global click to close dropdowns
+document.addEventListener('click', function() {
+  document.querySelectorAll('.dropdown-filter.open').forEach(function(d) { d.classList.remove('open'); });
+});
+
+// ====== Task Management ======
+function showTaskForm(taskId) {
+  const data = loadData();
+  const task = taskId ? data.tasks.find(t => t.id === taskId) : null;
+  const title = task ? '编辑任务' : '新建任务';
+  const html = `
+    <div class="modal-header">
+      <h3>${title}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>项目号 *</label>
+        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001">
+      </div>
+      <div class="form-group">
+        <label>任务名称 *</label>
+        <input type="text" id="mTaskName" value="${task ? task.taskName : ''}" placeholder="任务描述">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>开始时间</label>
+        <input type="date" id="mTaskStart" value="${task ? task.startDate : new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label>计划完成时间</label>
+        <input type="date" id="mTaskEnd" value="${task ? task.plannedEndDate : ''}">
+      </div>
+      <div class="form-group">
+        <label>任务状态</label>
+        <select id="mTaskStatus">
+          ${['未开始','进行中','已完成','已延期'].map(s => `<option value="${s}" ${task && task.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="saveTask('${taskId || ''}')">保存</button>
+    </div>
+  `;
+  openModal(html);
+}
+
+function saveTask(taskId) {
+  const projectName = document.getElementById('mTaskProject').value.trim();
+  const taskName = document.getElementById('mTaskName').value.trim();
+  const startDate = document.getElementById('mTaskStart').value;
+  const plannedEndDate = document.getElementById('mTaskEnd').value;
+  const status = document.getElementById('mTaskStatus').value;
+
+  if (!projectName || !taskName) { alert('请填写项目号和任务名称'); return; }
+
+  const data = loadData();
+  if (taskId) {
+    const task = data.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.projectName = projectName;
+      task.taskName = taskName;
+      task.startDate = startDate;
+      task.plannedEndDate = plannedEndDate;
+      task.status = status;
+    }
+  } else {
+    data.tasks.push({
+      id: genId(),
+      projectName,
+      taskName,
+      startDate,
+      plannedEndDate,
+      status,
+      delayRecords: [],
+      currentEndDate: plannedEndDate
+    });
+  }
+  saveData(data);
+  closeModal();
+  showToast("任务已保存");
+  renderTasks();
+}
+
+function deleteTask(id) {
+  if (!confirm('确定删除此任务？')) return;
+  const data = loadData();
+  data.tasks = data.tasks.filter(t => t.id !== id);
+  data.tempItems.forEach(item => {
+    item.affectedTaskIds = item.affectedTaskIds.filter(tid => tid !== id);
+  });
+  saveData(data);
+  showToast("任务已删除");
+  renderTasks();
+}
+
+function completeTask(id) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === id);
+  if (task) {
+    task.status = '已完成';
+    saveData(data);
+    showToast('任务已标记为完成');
+    renderTasks();
+  }
+}
+
+function getUniqueProjects() {
+  const data = loadData();
+  return [...new Set(data.tasks.map(t => t.projectName))].sort();
+}
+
+function renderTasks() {
+  const data = loadData();
+
+  // Initialize/update project dropdown filter
+  var projects = getUniqueProjects();
+  initDropdown('filterProject', projects, getDropdownValues('filterProject'));
+  var selectedProjects = getDropdownValues('filterProject');
+
+  // Initialize/update status dropdown filter
+  var statuses = ['未开始', '进行中', '已完成', '已延期'];
+  initDropdown('filterStatus', statuses, getDropdownValues('filterStatus'));
+  var selectedStatuses = getDropdownValues('filterStatus');
+
+  // Stats
+  const total = data.tasks.length;
+  const completed = data.tasks.filter(t => t.status === '已完成').length;
+  const delayed = data.tasks.filter(t => t.status === '已延期').length;
+  const inProgress = data.tasks.filter(t => t.status === '进行中').length;
+  document.getElementById('taskStats').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">总任务数</div></div>
+    <div class="stat-card"><div class="stat-value">${inProgress}</div><div class="stat-label">进行中</div></div>
+    <div class="stat-card"><div class="stat-value">${delayed}</div><div class="stat-label">已延期</div></div>
+    <div class="stat-card"><div class="stat-value">${completed}</div><div class="stat-label">已完成</div></div>
+  `;
+
+  let tasks = data.tasks;
+  if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
+  if (selectedStatuses.length > 0) tasks = tasks.filter(t => selectedStatuses.includes(t.status));
+
+  // Group by project
+  const groups = {};
+  tasks.forEach(t => {
+    if (!groups[t.projectName]) groups[t.projectName] = [];
+    groups[t.projectName].push(t);
+  });
+
+  // Hide projects with no pending tasks (default on)
+  const hideCompletedProjects = document.getElementById('hideCompletedProjects').checked;
+
+  if (tasks.length === 0 || (hideCompletedProjects && Object.values(groups).every(g => g.every(t => t.status === '已完成')))) {
+    document.getElementById('taskList').innerHTML = '<div class="empty-state"><p>暂无待办任务</p></div>';
+    return;
+  }
+
+  let html = '';
+  for (const [proj, projTasks] of Object.entries(groups)) {
+    // Skip projects where all tasks are completed (when toggle is on)
+    if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
+    html += `<div class="project-group"><div class="project-group-title">${proj}</div><table>
+      <thead><tr><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
+    projTasks.forEach(t => {
+      const delayCount = t.delayRecords.length;
+      const hasDelay = t.currentEndDate !== t.plannedEndDate;
+      html += `<tr>
+        <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
+        <td>${formatDate(t.startDate)}</td>
+        <td>${formatDate(t.plannedEndDate)}</td>
+        <td style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}">${formatDate(t.currentEndDate)}</td>
+        <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
+        <td>${delayCount > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次延期</span>` : '-'}</td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="showTaskForm('${t.id}')">编辑</button>
+          <button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>完成</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteTask('${t.id}')">删除</button>
+        </td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+  document.getElementById('taskList').innerHTML = html;
+}
+
+function showTaskDelays(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task || task.delayRecords.length === 0) return;
+
+  let timelineHtml = '<div class="timeline">';
+  let accumulatedHours = 0;
+  task.delayRecords.forEach(record => {
+    accumulatedHours += (record.delayHours || 0);
+    const workDays = hoursToWorkingDaysOffset(accumulatedHours);
+    const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
+    timelineHtml += `<div class="timeline-item">
+      <div class="timeline-date">${record.date} · 累计 ${accumulatedHours}h → 延期 ${workDays} 个工作日</div>
+      <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
+      ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
+      ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
+        <span class="delay-link" onclick="showTempItemDetail('${tempItem.id}')">查看关联临时事项：${tempItem.description}</span>
+        <button class="btn btn-outline btn-sm" onclick="editTempItemFromDelay('${tempItem.id}', '${taskId}')">编辑此事项</button>
+      </div>` : ''}
+    </div>`;
+  });
+  timelineHtml += '</div>';
+
+  openModal(`
+    <div class="modal-header">
+      <h3>延期记录 - ${task.taskName}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${task.plannedEndDate}</p>
+    ${timelineHtml}
+  `);
+}
+
+// Track whether we came from a delay modal and need to reopen it after editing
+var _pendingDelayModalTaskId = null;
+
+function editTempItemFromDelay(tempItemId, taskId) {
+  _pendingDelayModalTaskId = taskId;
+  closeModal();
+  showTempForm(tempItemId);
+}
+
+// ====== Temp Item Management ======
+function showTempForm(tempId) {
+  const data = loadData();
+  const item = tempId ? data.tempItems.find(t => t.id === tempId) : null;
+  const title = item ? '编辑临时事项' : '新建临时事项';
+  const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
+
+  const taskCheckboxes = incompleteTasks.map(t =>
+    `<label><input type="checkbox" value="${t.id}" class="temp-task-cb" ${item && item.affectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  ).join('');
+
+  const html = `
+    <div class="modal-header">
+      <h3>${title}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>事项日期</label>
+        <input type="date" id="mTempDate" value="${item ? item.date : new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label>时长</label>
+        <div style="display:flex; gap:4px;">
+          <input type="number" id="mTempDuration" value="${item ? item.durationValue : ''}" min="0" step="0.5" placeholder="如：2" style="flex:1;">
+          <select id="mTempDurationUnit" style="width:70px;">
+            <option value="h" ${item && item.durationUnit === 'h' ? 'selected' : ''}>小时</option>
+            <option value="d" ${item && item.durationUnit === 'd' ? 'selected' : ''}>天</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>事项描述</label>
+        <textarea id="mTempDesc" rows="2" placeholder="临时事项内容">${item ? item.description : ''}</textarea>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>影响范围</label>
+        <select id="mTempImpactType" onchange="toggleTempTaskSelect()">
+          <option value="all" ${item && item.impactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="specific" ${item && item.impactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row" id="mTempTaskSelectRow" style="display:${item && item.impactType === 'specific' ? 'flex' : 'none'};">
+      <div class="form-group" style="min-width:100%;">
+        <label>选择受影响的任务（未完成任务）</label>
+        ${incompleteTasks.length > 0 ?
+          `<div class="checkbox-group">${taskCheckboxes}</div>` :
+          '<p style="color:#999; font-size:13px; padding:8px;">暂无未完成任务</p>'}
+      </div>
+    </div>
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="_pendingDelayModalTaskId=null;closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="saveTempItem('${tempId || ''}')">保存并应用延期</button>
+    </div>
+  `;
+  openModal(html);
+}
+
+function toggleTempTaskSelect() {
+  const type = document.getElementById('mTempImpactType').value;
+  document.getElementById('mTempTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
+}
+
+function saveTempItem(tempId) {
+  const date = document.getElementById('mTempDate').value;
+  const durationValue = parseFloat(document.getElementById('mTempDuration').value) || 0;
+  const durationUnit = document.getElementById('mTempDurationUnit').value;
+  const description = document.getElementById('mTempDesc').value.trim();
+  const impactType = document.getElementById('mTempImpactType').value;
+
+  // 时长即延期时长，自动转换
+  const delayHours = durationUnit === 'd' ? durationValue * 8 : durationValue;
+
+  if (!description) { alert('请填写事项描述'); return; }
+
+  let affectedTaskIds = [];
+  if (impactType === 'specific') {
+    affectedTaskIds = [...document.querySelectorAll('.temp-task-cb:checked')].map(cb => cb.value);
+    if (affectedTaskIds.length === 0) { alert('请至少选择一个任务'); return; }
+  } else {
+    const data = loadData();
+    affectedTaskIds = data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
+  }
+
+  const data = loadData();
+
+  if (tempId) {
+    const oldItem = data.tempItems.find(t => t.id === tempId);
+    if (oldItem) {
+      const removedTaskIds = oldItem.affectedTaskIds.filter(tid => !affectedTaskIds.includes(tid));
+      removedTaskIds.forEach(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        if (task) {
+          task.delayRecords = task.delayRecords.filter(r => r.causedByTempItemId !== tempId);
+          recalcTaskEndDate(task);
+        }
+      });
+
+      affectedTaskIds.forEach(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        if (task) {
+          let existingRecord = task.delayRecords.find(r => r.causedByTempItemId === tempId);
+          if (existingRecord) {
+            existingRecord.delayHours = delayHours;
+            existingRecord.date = date;
+            existingRecord.reason = description;
+          } else {
+            task.delayRecords.push({
+              id: genId(),
+              date,
+              delayHours,
+              newEndDate: '',
+              causedByTempItemId: tempId,
+              reason: description
+            });
+          }
+          recalcTaskEndDate(task);
+        }
+      });
+
+      oldItem.date = date;
+      oldItem.durationValue = durationValue;
+      oldItem.durationUnit = durationUnit;
+      oldItem.description = description;
+      oldItem.impactType = impactType;
+      oldItem.affectedTaskIds = affectedTaskIds;
+      // 不再存储独立的 delayValue/delayUnit，delayHours 直接从 duration 计算
+    }
+  } else {
+    const newId = genId();
+    data.tempItems.push({
+      id: newId,
+      date,
+      durationValue,
+      durationUnit,
+      description,
+      impactType,
+      affectedTaskIds
+    });
+
+    affectedTaskIds.forEach(tid => {
+      const task = data.tasks.find(t => t.id === tid);
+      if (task) {
+        task.delayRecords.push({
+          id: genId(),
+          date,
+          delayHours,
+          newEndDate: '',
+          causedByTempItemId: newId,
+          reason: description
+        });
+        recalcTaskEndDate(task);
+      }
+    });
+  }
+
+  saveData(data);
+  closeModal();
+  showToast("临时事项已保存");
+  renderTempItems();
+  renderTasks();
+
+  // 如果是从延期记录弹窗进入编辑的，编辑完成后重新打开延期记录弹窗
+  if (_pendingDelayModalTaskId) {
+    var reopenTaskId = _pendingDelayModalTaskId;
+    _pendingDelayModalTaskId = null;
+    setTimeout(function() { showTaskDelays(reopenTaskId); }, 100);
+  }
+}
+
+function recalcTaskEndDate(task) {
+  if (task.delayRecords.length === 0) {
+    task.currentEndDate = task.plannedEndDate;
+    if (task.status === '已延期') task.status = '未开始';
+  } else {
+    // Sort by date, then apply each delay cumulatively
+    const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
+    let runningDate = task.plannedEndDate;
+    let accumulatedHours = 0;
+
+    sorted.forEach(r => {
+      accumulatedHours += (r.delayHours || 0);
+      const workDays = hoursToWorkingDaysOffset(accumulatedHours);
+      const newEnd = addWorkingDays(task.plannedEndDate, workDays);
+      r.newEndDate = newEnd;
+      runningDate = newEnd;
+    });
+
+    task.currentEndDate = runningDate;
+    if (task.status !== '已完成') task.status = '已延期';
+  }
+}
+
+function deleteTempItem(id) {
+  if (!confirm('确定删除此临时事项？已关联的任务延期记录将被清除。')) return;
+  const data = loadData();
+  const item = data.tempItems.find(t => t.id === id);
+  if (item) {
+    item.affectedTaskIds.forEach(tid => {
+      const task = data.tasks.find(t => t.id === tid);
+      if (task) {
+        task.delayRecords = task.delayRecords.filter(r => r.causedByTempItemId !== id);
+        recalcTaskEndDate(task);
+      }
+    });
+  }
+  data.tempItems = data.tempItems.filter(t => t.id !== id);
+  saveData(data);
+  showToast("临时事项已删除");
+  renderTempItems();
+}
+
+function renderTempItems() {
+  const data = loadData();
+  if (data.tempItems.length === 0) {
+    document.getElementById('tempList').innerHTML = '<div class="empty-state"><p>暂无临时事项</p></div>';
+    return;
+  }
+
+  let html = '<table><thead><tr><th>日期</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>操作</th></tr></thead><tbody>';
+  data.tempItems.forEach(item => {
+    const affectedNames = item.affectedTaskIds.map(tid => {
+      const task = data.tasks.find(t => t.id === tid);
+      return task ? `<span class="impact-chip" title="[${task.projectName}] ${task.taskName}">[${task.projectName}] ${task.taskName}</span>` : '';
+    }).join(' ');
+
+    const durationDisplay = item.durationUnit === 'd' ? `${item.durationValue}天` : `${item.durationValue}h`;
+    const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
+    const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
+    const delayDisplay = `${itemDelayHours}h → ${delayWorkdays} 工作日`;
+
+    html += `<tr>
+      <td>${item.date}</td>
+      <td>${durationDisplay}</td>
+      <td title="${item.description}">${item.description.length > 30 ? item.description.substring(0, 30) + '...' : item.description}</td>
+      <td>${delayDisplay}</td>
+      <td style="max-width:300px;">${affectedNames || '-'}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="showTempForm('${item.id}')">编辑</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTempItem('${item.id}')">删除</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('tempList').innerHTML = html;
+}
+
+function showTempItemDetail(tempId) {
+  const data = loadData();
+  const item = data.tempItems.find(t => t.id === tempId);
+  if (!item) return;
+
+  const affectedNames = item.affectedTaskIds.map(tid => {
+    const task = data.tasks.find(t => t.id === tid);
+    return task ? `<li>[${task.projectName}] ${task.taskName} — 当前完成时间: ${task.currentEndDate}</li>` : '';
+  }).join('');
+
+  const durationDisplay = item.durationUnit === 'd' ? `${item.durationValue} 天` : `${item.durationValue} 小时`;
+  const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
+  const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
+  const delayDisplay = `${itemDelayHours} 小时 → 延期 ${delayWorkdays} 工作日`;
+
+  openModal(`
+    <div class="modal-header">
+      <h3>临时事项详情</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>日期</label><p>${item.date}</p></div>
+      <div class="form-group"><label>时长</label><p>${durationDisplay}</p></div>
+      <div class="form-group"><label>导致延期</label><p>${delayDisplay}</p></div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px;"><label>事项描述</label><p>${item.description}</p></div>
+    <div class="form-group"><label>影响范围：${item.impactType === 'all' ? '所有未完成任务' : '指定任务'}</label></div>
+    <div class="form-group"><label>受影响的任务：</label>
+      <ul style="margin-top:6px; padding-left:20px; font-size:13px;">${affectedNames || '<li>无</li>'}</ul>
+    </div>
+  `);
+}
+
+// ====== Review ======
+function renderReview() {
+  const data = loadData();
+
+  // Initialize/update project dropdown filter
+  const projects = getUniqueProjects();
+  initDropdown('reviewFilterProject', projects, getDropdownValues('reviewFilterProject'));
+  var selectedProjects = getDropdownValues('reviewFilterProject');
+
+  // Read delayed-only filter
+  const filterDelayed = document.getElementById('reviewFilterDelayed').value;
+
+  let tasks = data.tasks;
+  if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
+  if (filterDelayed === 'yes') tasks = tasks.filter(t => t.delayRecords.length > 0);
+
+  if (tasks.length === 0) {
+    document.getElementById('reviewList').innerHTML = '<div class="empty-state"><p>暂无任务数据</p></div>';
+    return;
+  }
+
+  let html = '<table><thead><tr><th>项目号</th><th>任务名称</th><th>计划完成</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
+  tasks.forEach(t => {
+    const delayCount = t.delayRecords.length;
+    let delayCell = '-';
+    if (delayCount > 0) {
+      delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次延期 — 点击查看详情</span>`;
+    }
+    html += `<tr>
+      <td>${t.projectName}</td>
+      <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
+      <td>${formatDate(t.plannedEndDate)}</td>
+      <td>${formatDate(t.currentEndDate)}</td>
+      <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
+      <td>${delayCell}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('reviewList').innerHTML = html;
+}
+
+// ====== Data Management ======
+function exportData() {
+  const data = loadData();
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `task-manager-backup-${new Date().toISOString().split('T')[0]}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("数据已导出");
+}
+
+function importData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const imported = JSON.parse(e.target.result);
+      if (!imported.tasks || !imported.tempItems) {
+        showToast('无效的数据格式', 'error'); return;
+      }
+      const choice = confirm(
+        `将导入 ${imported.tasks.length} 条任务和 ${imported.tempItems.length} 条临时事项。\n` +
+        `点击「确定」覆盖当前数据，点击「取消」合并到当前数据。`
+      );
+      const data = loadData();
+      if (choice) {
+        // Overwrite
+        saveData(imported);
+        showToast('数据已覆盖导入');
+      } else {
+        // Merge: append new tasks/tempItems with new IDs to avoid conflicts
+        const existingTaskIds = new Set(data.tasks.map(t => t.id));
+        const existingTempIds = new Set(data.tempItems.map(t => t.id));
+        imported.tasks.forEach(t => {
+          if (!existingTaskIds.has(t.id)) {
+            data.tasks.push(t);
+          }
+        });
+        imported.tempItems.forEach(t => {
+          if (!existingTempIds.has(t.id)) {
+            data.tempItems.push(t);
+          }
+        });
+        saveData(data);
+        showToast(`已合并导入：新增 ${imported.tasks.filter(t => !existingTaskIds.has(t.id)).length} 条任务，${imported.tempItems.filter(t => !existingTempIds.has(t.id)).length} 条临时事项`);
+      }
+      renderTasks();
+    } catch {
+      showToast('JSON 解析失败，请检查文件格式', 'error');
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function clearAllData() {
+  if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
+  if (!confirm('再次确认：真的要清空所有任务和临时事项吗？')) return;
+  saveData({ tasks: [], tempItems: [] });
+  showToast("所有数据已清空");
+  renderTasks();
+}
+
+// ====== Batch Import ======
+let importPreviewData = [];
+
+function showBatchImport() {
+  importPreviewData = [];
+  const html = `
+    <div class="modal-header">
+      <h3>批量导入任务</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="min-width:100%;">
+        <label>选择导入格式</label>
+        <select id="mImportFormat" onchange="toggleImportHelp()">
+          <option value="csv">CSV 格式（推荐）</option>
+          <option value="json">JSON 格式</option>
+        </select>
+      </div>
+    </div>
+    <div id="importHelpCSV" class="import-format-help">
+      <strong>CSV 格式说明：</strong><br>
+      第一行为表头（可选），数据从第二行开始。列顺序：<br>
+      <code>项目号</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br><br>
+      <strong>示例：</strong><br>
+      <code>PRJ-001,需求分析,2024-06-01,2024-06-15,未开始</code><br>
+      <code>PRJ-001,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
+      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
+    </div>
+    <div id="importHelpJSON" class="import-format-help" style="display:none;">
+      <strong>JSON 格式说明：</strong><br>
+      数组格式，每个元素包含以下字段：<br>
+      <code>projectName</code> 项目号（必填）<br>
+      <code>taskName</code> 任务名称（必填）<br>
+      <code>startDate</code> 开始时间（YYYY-MM-DD）<br>
+      <code>plannedEndDate</code> 计划完成时间（YYYY-MM-DD）<br>
+      <code>status</code> 任务状态<br><br>
+      <strong>示例：</strong><br>
+      <code>[{"projectName":"PRJ-001","taskName":"需求分析","startDate":"2024-06-01","plannedEndDate":"2024-06-15","status":"未开始"}]</code>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="min-width:100%;">
+        <label>粘贴数据内容</label>
+        <textarea id="mImportData" rows="8" placeholder="在此粘贴 CSV 或 JSON 数据..."></textarea>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="min-width:100%;">
+        <label>或选择文件导入</label>
+        <input type="file" id="mImportFile" accept=".csv,.txt,.json" onchange="handleImportFile(event)">
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <button class="btn btn-outline" onclick="previewImportData()">预览数据</button>
+    </div>
+    <div id="importPreviewContainer"></div>
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="executeBatchImport()">确认导入</button>
+    </div>
+  `;
+  openModal(html);
+}
+
+function toggleImportHelp() {
+  const format = document.getElementById('mImportFormat').value;
+  document.getElementById('importHelpCSV').style.display = format === 'csv' ? 'block' : 'none';
+  document.getElementById('importHelpJSON').style.display = format === 'json' ? 'block' : 'none';
+}
+
+function handleImportFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('mImportData').value = e.target.result;
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function previewImportData() {
+  const format = document.getElementById('mImportFormat').value;
+  const raw = document.getElementById('mImportData').value.trim();
+  if (!raw) { alert('请先粘贴或上传数据'); return; }
+
+  importPreviewData = [];
+  let errors = [];
+
+  if (format === 'csv') {
+    const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+    let startIdx = 0;
+    if (lines.length > 0) {
+      const firstLine = lines[0].toLowerCase();
+      if (firstLine.includes('项目') || firstLine.includes('project') || firstLine.includes('任务') || firstLine.includes('task')) {
+        startIdx = 1;
+      }
+    }
+    for (let i = startIdx; i < lines.length; i++) {
+      const parts = lines[i].split(',').map(p => p.trim());
+      if (parts.length < 2) {
+        errors.push({ row: i + 1, msg: '至少需要项目号和任务名称两列' });
+        continue;
+      }
+      const projectName = parts[0] || '';
+      const taskName = parts[1] || '';
+      const startDate = parts[2] || '';
+      const plannedEndDate = parts[3] || '';
+      const status = parts[4] || '未开始';
+
+      if (!projectName) { errors.push({ row: i + 1, msg: '项目号为空' }); continue; }
+      if (!taskName) { errors.push({ row: i + 1, msg: '任务名称为空' }); continue; }
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) { errors.push({ row: i + 1, msg: '开始时间格式错误（应为 YYYY-MM-DD）' }); continue; }
+      if (plannedEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(plannedEndDate)) { errors.push({ row: i + 1, msg: '计划完成时间格式错误（应为 YYYY-MM-DD）' }); continue; }
+
+      const validStatus = ['未开始', '进行中', '已完成', '已延期'];
+      const finalStatus = validStatus.includes(status) ? status : '未开始';
+
+      importPreviewData.push({ projectName, taskName, startDate, plannedEndDate, status: finalStatus });
+    }
+  } else {
+    try {
+      const arr = JSON.parse(raw);
+      const list = Array.isArray(arr) ? arr : [arr];
+      list.forEach((item, idx) => {
+        if (!item.projectName) { errors.push({ row: idx + 1, msg: 'projectName 为空' }); return; }
+        if (!item.taskName) { errors.push({ row: idx + 1, msg: 'taskName 为空' }); return; }
+        const startDate = item.startDate || '';
+        const plannedEndDate = item.plannedEndDate || '';
+        if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) { errors.push({ row: idx + 1, msg: 'startDate 格式错误' }); return; }
+        if (plannedEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(plannedEndDate)) { errors.push({ row: idx + 1, msg: 'plannedEndDate 格式错误' }); return; }
+        const validStatus = ['未开始', '进行中', '已完成', '已延期'];
+        const status = validStatus.includes(item.status) ? item.status : '未开始';
+        importPreviewData.push({ projectName: item.projectName, taskName: item.taskName, startDate, plannedEndDate, status });
+      });
+    } catch {
+      alert('JSON 解析失败，请检查格式');
+      return;
+    }
+  }
+
+  let previewHtml = `<div style="margin-top:12px;"><strong>预览：共 ${importPreviewData.length} 条有效数据</strong>`;
+  if (errors.length > 0) {
+    previewHtml += `<span style="color:#dc3545; margin-left:12px;">${errors.length} 条错误已跳过</span>`;
+  }
+  previewHtml += '</div>';
+
+  if (importPreviewData.length > 0) {
+    previewHtml += '<div class="import-preview"><table><thead><tr><th>项目号</th><th>任务名称</th><th>开始时间</th><th>计划完成</th><th>状态</th></tr></thead><tbody>';
+    importPreviewData.slice(0, 100).forEach(row => {
+      previewHtml += `<tr class="import-row-ok"><td>${row.projectName}</td><td>${row.taskName}</td><td>${row.startDate || '-'}</td><td>${row.plannedEndDate || '-'}</td><td>${row.status}</td></tr>`;
+    });
+    if (importPreviewData.length > 100) {
+      previewHtml += `<tr><td colspan="5" style="text-align:center; color:#999;">... 还有 ${importPreviewData.length - 100} 条数据</td></tr>`;
+    }
+    previewHtml += '</tbody></table></div>';
+  }
+
+  if (errors.length > 0) {
+    previewHtml += '<div style="margin-top:8px; font-size:12px; color:#dc3545;">';
+    errors.slice(0, 10).forEach(e => { previewHtml += `<div>第 ${e.row} 行：${e.msg}</div>`; });
+    if (errors.length > 10) previewHtml += `<div>... 还有 ${errors.length - 10} 条错误</div>`;
+    previewHtml += '</div>';
+  }
+
+  document.getElementById('importPreviewContainer').innerHTML = previewHtml;
+}
+
+function executeBatchImport() {
+  if (importPreviewData.length === 0) { alert('请先预览数据'); return; }
+  if (!confirm(`确定导入 ${importPreviewData.length} 条任务？`)) return;
+
+  const data = loadData();
+  importPreviewData.forEach(item => {
+    data.tasks.push({
+      id: genId(),
+      projectName: item.projectName,
+      taskName: item.taskName,
+      startDate: item.startDate,
+      plannedEndDate: item.plannedEndDate,
+      status: item.status,
+      delayRecords: [],
+      currentEndDate: item.plannedEndDate
+    });
+  });
+  saveData(data);
+  showToast(`成功导入 ${importPreviewData.length} 条任务`);
+  importPreviewData = [];
+  closeModal();
+  renderTasks();
+}
+
+// ====== Init ======
+async function init() {
+  updateDataStatus();
+  renderTasks();
+  // 异步加载官方节假日数据
+  await loadHolidaysFromAPI();
+}
+init();
+</script>
+</body>
+</html>
