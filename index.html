@@ -708,6 +708,7 @@ function saveTask(taskId) {
       taskName,
       startDate,
       plannedEndDate,
+      adjustedEndDate: '',
       status,
       delayRecords: [],
       currentEndDate: plannedEndDate
@@ -804,19 +805,21 @@ function renderTasks() {
     // Skip projects where all tasks are completed (when toggle is on)
     if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
     html += `<div class="project-group"><div class="project-group-title">${proj}</div><table>
-      <thead><tr><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
+      <thead><tr><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
       const delayCount = t.delayRecords.length;
-      const hasDelay = t.currentEndDate !== t.plannedEndDate;
+      const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
       html += `<tr>
         <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
         <td>${formatDate(t.startDate)}</td>
         <td>${formatDate(t.plannedEndDate)}</td>
+        <td style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
         <td style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}">${formatDate(t.currentEndDate)}</td>
         <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
-        <td>${delayCount > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次延期</span>` : '-'}</td>
+        <td>${delayCount > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次记录</span>` : '-'}</td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="showTaskForm('${t.id}')">编辑</button>
+          <button class="btn btn-outline btn-sm" onclick="showAdjustForm('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>调整</button>
           <button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>完成</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTask('${t.id}')">删除</button>
         </td>
@@ -838,8 +841,10 @@ function showTaskDelays(taskId) {
     accumulatedHours += (record.delayHours || 0);
     const workDays = hoursToWorkingDaysOffset(accumulatedHours);
     const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
+    const isAdjust = record.type === 'adjust';
+    const tag = isAdjust ? '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
     timelineHtml += `<div class="timeline-item">
-      <div class="timeline-date">${record.date} · 累计 ${accumulatedHours}h → 延期 ${workDays} 个工作日</div>
+      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整' : '延期'} ${workDays} 个工作日</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
       ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
       ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -855,7 +860,7 @@ function showTaskDelays(taskId) {
       <h3>延期记录 - ${task.taskName}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${task.plannedEndDate}</p>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${task.plannedEndDate} ${task.adjustedEndDate ? ' → 调整为：' + task.adjustedEndDate : ''}</p>
     ${timelineHtml}
   `);
 }
@@ -1045,26 +1050,85 @@ try {
 }
 
 function recalcTaskEndDate(task) {
+  const baseDate = task.adjustedEndDate || task.plannedEndDate;
   if (task.delayRecords.length === 0) {
-    task.currentEndDate = task.plannedEndDate;
+    task.currentEndDate = baseDate;
     if (task.status === '已延期') task.status = '未开始';
   } else {
-    // Sort by date, then apply each delay cumulatively
     const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
-    let runningDate = task.plannedEndDate;
     let accumulatedHours = 0;
 
     sorted.forEach(r => {
       accumulatedHours += (r.delayHours || 0);
       const workDays = hoursToWorkingDaysOffset(accumulatedHours);
-      const newEnd = addWorkingDays(task.plannedEndDate, workDays);
+      const newEnd = addWorkingDays(baseDate, workDays);
       r.newEndDate = newEnd;
-      runningDate = newEnd;
     });
 
-    task.currentEndDate = runningDate;
+    task.currentEndDate = sorted.length > 0 ? sorted[sorted.length - 1].newEndDate : baseDate;
     if (task.status !== '已完成') task.status = '已延期';
   }
+}
+
+function showAdjustForm(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const baseDate = task.adjustedEndDate || task.plannedEndDate;
+  const html = `
+    <div class="modal-header">
+      <h3>计划调整 - ${task.taskName}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>当前计划完成时间</label>
+        <input type="text" value="${formatDate(baseDate)}" disabled style="background:#f5f5f5;">
+      </div>
+      <div class="form-group">
+        <label>调整为</label>
+        <input type="date" id="mAdjustDate" value="${baseDate}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>调整原因</label>
+        <textarea id="mAdjustReason" rows="2" placeholder="如：需求变更、资源调整等"></textarea>
+      </div>
+    </div>
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="saveAdjustment('${taskId}')">确认调整</button>
+    </div>`;
+  openModal(html);
+}
+
+function saveAdjustment(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const newDate = document.getElementById('mAdjustDate').value;
+  const reason = document.getElementById('mAdjustReason').value.trim();
+  if (!newDate) { showToast('请选择调整后的日期', 'error'); return; }
+  const baseDate = task.adjustedEndDate || task.plannedEndDate;
+  if (newDate === baseDate) { closeModal(); return; }
+  const diffMs = new Date(newDate) - new Date(baseDate);
+  const delayHours = Math.round(diffMs / (1000 * 60 * 60));
+  task.adjustedEndDate = newDate;
+  task.delayRecords.push({
+    id: genId(),
+    date: new Date().toISOString().split('T')[0],
+    delayHours: delayHours,
+    newEndDate: '',
+    causedByTempItemId: null,
+    reason: reason || '计划调整',
+    type: 'adjust'
+  });
+  recalcTaskEndDate(task);
+  saveData(data);
+  closeModal();
+  showToast('计划已调整');
+  renderTasks();
 }
 
 function deleteTempItem(id) {
@@ -1180,17 +1244,18 @@ function renderReview() {
     return;
   }
 
-  let html = '<table><thead><tr><th>项目号</th><th>任务名称</th><th>计划完成</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>项目号</th><th>任务名称</th><th>计划完成</th><th>计划调整</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
   tasks.forEach(t => {
     const delayCount = t.delayRecords.length;
     let delayCell = '-';
     if (delayCount > 0) {
-      delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次延期 — 点击查看详情</span>`;
+      delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次记录 — 点击查看详情</span>`;
     }
     html += `<tr>
       <td>${t.projectName}</td>
       <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
       <td>${formatDate(t.plannedEndDate)}</td>
+      <td style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
       <td>${formatDate(t.currentEndDate)}</td>
       <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
       <td>${delayCell}</td>
