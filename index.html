@@ -937,6 +937,7 @@ function toggleTempTaskSelect() {
 }
 
 function saveTempItem(tempId) {
+try {
   const date = document.getElementById('mTempDate').value;
   const durationValue = parseFloat(document.getElementById('mTempDuration').value) || 0;
   const durationUnit = document.getElementById('mTempDurationUnit').value;
@@ -1039,6 +1040,7 @@ function saveTempItem(tempId) {
     _pendingDelayModalTaskId = null;
     setTimeout(function() { showTaskDelays(reopenTaskId); }, 100);
   }
+} catch(e) { alert('保存出错: ' + e.message); console.error(e); }
 }
 
 function recalcTaskEndDate(task) {
