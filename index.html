@@ -626,6 +626,15 @@ function clearDropdown(containerId, allItems) {
 document.addEventListener('click', function() {
   document.querySelectorAll('.dropdown-filter.open').forEach(function(d) { d.classList.remove('open'); });
 });
+// Escape key to close modal
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    if (document.getElementById('modalOverlay').classList.contains('active')) {
+      _pendingDelayModalTaskId = null;
+      closeModal();
+    }
+  }
+});
 
 // ====== Task Management ======
 function showTaskForm(taskId) {
@@ -1150,7 +1159,7 @@ function renderReview() {
   // Initialize/update project dropdown filter
   const projects = getUniqueProjectsFromData(data);
   initDropdown('reviewFilterProject', projects, getDropdownValues('reviewFilterProject'));
-  var selectedProjects = getDropdownValues('reviewFilterProject');
+  const selectedProjects = getDropdownValues('reviewFilterProject');
 
   // Read delayed-only filter
   const filterDelayed = document.getElementById('reviewFilterDelayed').value;
@@ -1299,6 +1308,9 @@ function showBatchImport() {
       <div class="form-group" style="min-width:100%;">
         <label>粘贴数据内容</label>
         <textarea id="mImportData" rows="8" placeholder="在此粘贴 CSV 或 JSON 数据..."></textarea>
+        <div style="margin-top:4px; text-align:right;">
+          <button class="btn btn-sm btn-outline" onclick="document.getElementById('mImportData').value=''; importPreviewData=[]; document.getElementById('importPreviewContainer').innerHTML='';">清空内容</button>
+        </div>
       </div>
     </div>
     <div class="form-row">
