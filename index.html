@@ -335,12 +335,6 @@ function formatDate(d) {
   } catch { return d; }
 }
 
-function addDays(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
-
 // ====== Holiday & Working Day Logic ======
 // 数据来源: https://github.com/NateScarlet/holiday-cn (自动抓取国务院公告)
 const HOLIDAY_API_BASE = 'https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master';
@@ -676,7 +670,7 @@ function saveTask(taskId) {
   const plannedEndDate = document.getElementById('mTaskEnd').value;
   const status = document.getElementById('mTaskStatus').value;
 
-  if (!projectName || !taskName) { alert('请填写项目号和任务名称'); return; }
+  if (!projectName || !taskName) { showToast('请填写项目号和任务名称', 'error'); return; }
 
   const data = loadData();
   if (taskId) {
