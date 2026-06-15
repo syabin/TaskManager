@@ -112,6 +112,7 @@ tr:hover { background: var(--bg-light); }
 .empty-state p { margin-bottom: 12px; }
 
 .task-name-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.date-cell { width: 100px; min-width: 100px; white-space: nowrap; text-align: center; }
 
 .impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
 
@@ -811,10 +812,10 @@ function renderTasks() {
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
       html += `<tr>
         <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
-        <td>${formatDate(t.startDate)}</td>
-        <td>${formatDate(t.plannedEndDate)}</td>
-        <td style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
-        <td style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}">${formatDate(t.currentEndDate)}</td>
+        <td class="date-cell">${formatDate(t.startDate)}</td>
+        <td class="date-cell">${formatDate(t.plannedEndDate)}</td>
+        <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
+        <td class="date-cell" style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}">${formatDate(t.currentEndDate)}</td>
         <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
         <td>${delayCount > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次记录</span>` : '-'}</td>
         <td>
@@ -1254,9 +1255,9 @@ function renderReview() {
     html += `<tr>
       <td>${t.projectName}</td>
       <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
-      <td>${formatDate(t.plannedEndDate)}</td>
-      <td style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
-      <td>${formatDate(t.currentEndDate)}</td>
+      <td class="date-cell">${formatDate(t.plannedEndDate)}</td>
+      <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
+      <td class="date-cell">${formatDate(t.currentEndDate)}</td>
       <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
       <td>${delayCell}</td>
     </tr>`;
