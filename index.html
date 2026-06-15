@@ -474,8 +474,9 @@ function hoursToWorkingDaysOffset(hours) {
 
 // Add working days to a date (skipping weekends and holidays)
 function addWorkingDays(dateStr, workDays) {
-  if (!workDays || workDays <= 0) return dateStr;
+  if (!workDays || workDays <= 0 || !dateStr) return dateStr;
   let d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
   let count = 0;
   while (count < workDays) {
     d.setDate(d.getDate() + 1);
@@ -1040,7 +1041,7 @@ try {
     _pendingDelayModalTaskId = null;
     setTimeout(function() { showTaskDelays(reopenTaskId); }, 100);
   }
-} catch(e) { alert('保存出错: ' + e.message); console.error(e); }
+} catch(e) { console.error('saveTempItem error:', e); }
 }
 
 function recalcTaskEndDate(task) {
