@@ -846,12 +846,11 @@ function showTaskDelays(taskId) {
     const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
     const isAdjust = record.type === 'adjust';
     const tag = isAdjust ? '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
-    const adjustBtns = isAdjust ? `<span style="margin-left:8px;">
+    const adjustBtn = isAdjust ? `<span style="margin-left:8px;">
         <button class="btn btn-outline btn-sm" onclick="editAdjustRecord('${taskId}','${record.id}')">编辑</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteAdjustRecord('${taskId}','${record.id}')">删除</button>
       </span>` : '';
     timelineHtml += `<div class="timeline-item">
-      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}${adjustBtns}</div>
+      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}${adjustBtn}</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
       ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
       ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -1079,14 +1078,20 @@ function recalcTaskEndDate(task) {
   }
 }
 
-function showAdjustForm(taskId) {
+function showAdjustForm(taskId, recordId) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === taskId);
   if (!task) return;
-  const baseDate = task.adjustedEndDate || task.plannedEndDate;
+  const record = recordId ? task.delayRecords.find(r => r.id === recordId) : null;
+  const baseDate = record ? (record.newEndDate || task.adjustedEndDate || task.plannedEndDate) : (task.adjustedEndDate || task.plannedEndDate);
+  const reason = record ? (record.reason === '计划调整' ? '' : record.reason) : '';
+  const title = record ? '编辑计划调整' : '计划调整';
+  const btnText = record ? '确认修改' : '确认调整';
+  const btnOnclick = record ? `saveAdjustEdit('${taskId}','${recordId}')` : `saveAdjustment('${taskId}')`;
+  const deleteBtn = record ? `<button class="btn btn-danger" onclick="deleteAdjustRecord('${taskId}','${recordId}')" style="margin-right:auto;">删除此调整</button>` : '';
   const html = `
     <div class="modal-header">
-      <h3>计划调整 - ${task.taskName}</h3>
+      <h3>${title} - ${task.taskName}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
     <div class="form-row">
@@ -1102,12 +1107,15 @@ function showAdjustForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>调整原因</label>
-        <textarea id="mAdjustReason" rows="2" placeholder="如：需求变更、资源调整等"></textarea>
+        <textarea id="mAdjustReason" rows="2" placeholder="如：需求变更、资源调整等">${reason}</textarea>
       </div>
     </div>
-    <div style="text-align:right; margin-top:16px;">
-      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveAdjustment('${taskId}')">确认调整</button>
+    <div style="display:flex; margin-top:16px;">
+      ${deleteBtn}
+      <div style="margin-left:auto;">
+        <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+        <button class="btn btn-primary" onclick="${btnOnclick}">${btnText}</button>
+      </div>
     </div>`;
   openModal(html);
 }
@@ -1139,23 +1147,7 @@ function saveAdjustment(taskId) {
 }
 
 function editAdjustRecord(taskId, recordId) {
-  const data = loadData();
-  const task = data.tasks.find(t => t.id === taskId);
-  if (!task) return;
-  const record = task.delayRecords.find(r => r.id === recordId);
-  if (!record) return;
-  showAdjustForm(taskId);
-  setTimeout(() => {
-    const mAdjustDate = document.getElementById('mAdjustDate');
-    const mAdjustReason = document.getElementById('mAdjustReason');
-    if (mAdjustDate) mAdjustDate.value = record.newEndDate || task.adjustedEndDate || task.plannedEndDate;
-    if (mAdjustReason) mAdjustReason.value = record.reason === '计划调整' ? '' : record.reason;
-    const btn = document.querySelector('.btn-primary[onclick^="saveAdjustment"]');
-    if (btn) {
-      btn.textContent = '确认修改';
-      btn.setAttribute('onclick', `saveAdjustEdit('${taskId}','${recordId}')`);
-    }
-  }, 50);
+  showAdjustForm(taskId, recordId);
 }
 
 function saveAdjustEdit(taskId, recordId) {
@@ -1169,7 +1161,7 @@ function saveAdjustEdit(taskId, recordId) {
   const record = task.delayRecords.find(r => r.id === recordId);
   if (record) {
     record.date = new Date().toISOString().split('T')[0];
-    record.newEndDate = '';
+    record.newEndDate = newDate;
     record.reason = reason || '计划调整';
   }
   recalcTaskEndDate(task);
