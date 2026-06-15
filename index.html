@@ -845,7 +845,7 @@ function showTaskDelays(taskId) {
     const workDays = hoursToWorkingDaysOffset(accumulatedHours);
     const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
     const isAdjust = record.type === 'adjust';
-    const tag = isAdjust ? '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
+    const tag = isAdjust ? '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
     timelineHtml += `<div class="timeline-item">
       <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
