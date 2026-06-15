@@ -839,13 +839,15 @@ function showTaskDelays(taskId) {
   let timelineHtml = '<div class="timeline">';
   let accumulatedHours = 0;
   task.delayRecords.forEach(record => {
-    accumulatedHours += (record.delayHours || 0);
+    if (record.type !== 'adjust') {
+      accumulatedHours += (record.delayHours || 0);
+    }
     const workDays = hoursToWorkingDaysOffset(accumulatedHours);
     const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
     const isAdjust = record.type === 'adjust';
     const tag = isAdjust ? '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
     timelineHtml += `<div class="timeline-item">
-      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整' : '延期'} ${workDays} 个工作日</div>
+      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
       ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
       ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -1060,7 +1062,9 @@ function recalcTaskEndDate(task) {
     let accumulatedHours = 0;
 
     sorted.forEach(r => {
-      accumulatedHours += (r.delayHours || 0);
+      if (r.type !== 'adjust') {
+        accumulatedHours += (r.delayHours || 0);
+      }
       const workDays = hoursToWorkingDaysOffset(accumulatedHours);
       const newEnd = addWorkingDays(baseDate, workDays);
       r.newEndDate = newEnd;
@@ -1113,13 +1117,11 @@ function saveAdjustment(taskId) {
   if (!newDate) { showToast('请选择调整后的日期', 'error'); return; }
   const baseDate = task.adjustedEndDate || task.plannedEndDate;
   if (newDate === baseDate) { closeModal(); return; }
-  const diffMs = new Date(newDate) - new Date(baseDate);
-  const delayHours = Math.round(diffMs / (1000 * 60 * 60));
   task.adjustedEndDate = newDate;
   task.delayRecords.push({
     id: genId(),
     date: new Date().toISOString().split('T')[0],
-    delayHours: delayHours,
+    delayHours: 0,
     newEndDate: '',
     causedByTempItemId: null,
     reason: reason || '计划调整',
