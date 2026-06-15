@@ -949,15 +949,13 @@ function saveTempItem(tempId) {
   if (!description) { showToast('请填写事项描述', 'error'); return; }
 
   let affectedTaskIds = [];
+  const data = loadData();
   if (impactType === 'specific') {
     affectedTaskIds = [...document.querySelectorAll('.temp-task-cb:checked')].map(cb => cb.value);
     if (affectedTaskIds.length === 0) { showToast('请至少选择一个任务', 'error'); return; }
   } else {
-    const data = loadData();
     affectedTaskIds = data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
   }
-
-  const data = loadData();
 
   if (tempId) {
     const oldItem = data.tempItems.find(t => t.id === tempId);
