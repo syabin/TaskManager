@@ -41,7 +41,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tab-btn { padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 3px solid transparent; transition: all 0.2s; }
 .tab-btn:hover { color: var(--primary); }
 .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
-.tab-content { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+.tab-content { display: none; padding: 24px; max-width: 1500px; margin: 0 auto; }
 .tab-content.active { display: block; }
 
 .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
@@ -846,8 +846,12 @@ function showTaskDelays(taskId) {
     const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
     const isAdjust = record.type === 'adjust';
     const tag = isAdjust ? '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
+    const adjustBtns = isAdjust ? `<span style="margin-left:8px;">
+        <button class="btn btn-outline btn-sm" onclick="editAdjustRecord('${taskId}','${record.id}')">编辑</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteAdjustRecord('${taskId}','${record.id}')">删除</button>
+      </span>` : '';
     timelineHtml += `<div class="timeline-item">
-      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}</div>
+      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}${adjustBtns}</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
       ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
       ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -1131,6 +1135,63 @@ function saveAdjustment(taskId) {
   saveData(data);
   closeModal();
   showToast('计划已调整');
+  renderTasks();
+}
+
+function editAdjustRecord(taskId, recordId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const record = task.delayRecords.find(r => r.id === recordId);
+  if (!record) return;
+  showAdjustForm(taskId);
+  setTimeout(() => {
+    const mAdjustDate = document.getElementById('mAdjustDate');
+    const mAdjustReason = document.getElementById('mAdjustReason');
+    if (mAdjustDate) mAdjustDate.value = record.newEndDate || task.adjustedEndDate || task.plannedEndDate;
+    if (mAdjustReason) mAdjustReason.value = record.reason === '计划调整' ? '' : record.reason;
+    const btn = document.querySelector('.btn-primary[onclick^="saveAdjustment"]');
+    if (btn) {
+      btn.textContent = '确认修改';
+      btn.setAttribute('onclick', `saveAdjustEdit('${taskId}','${recordId}')`);
+    }
+  }, 50);
+}
+
+function saveAdjustEdit(taskId, recordId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const newDate = document.getElementById('mAdjustDate').value;
+  const reason = document.getElementById('mAdjustReason').value.trim();
+  if (!newDate) { showToast('请选择调整后的日期', 'error'); return; }
+  task.adjustedEndDate = newDate;
+  const record = task.delayRecords.find(r => r.id === recordId);
+  if (record) {
+    record.date = new Date().toISOString().split('T')[0];
+    record.newEndDate = '';
+    record.reason = reason || '计划调整';
+  }
+  recalcTaskEndDate(task);
+  saveData(data);
+  closeModal();
+  showToast('计划调整已修改');
+  renderTasks();
+}
+
+function deleteAdjustRecord(taskId, recordId) {
+  if (!confirm('确定删除此计划调整记录？将基于原始计划日期重新计算。')) return;
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  task.delayRecords = task.delayRecords.filter(r => r.id !== recordId);
+  const lastAdjust = [...task.delayRecords].reverse().find(r => r.type === 'adjust');
+  task.adjustedEndDate = lastAdjust ? lastAdjust.newEndDate || lastAdjust.reason : '';
+  if (!lastAdjust) task.adjustedEndDate = '';
+  recalcTaskEndDate(task);
+  saveData(data);
+  closeModal();
+  showToast('计划调整已删除');
   renderTasks();
 }
 
