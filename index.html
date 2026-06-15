@@ -208,6 +208,10 @@ tr:hover { background: var(--bg-light); }
     </div>
     <div class="filter-bar">
       <div class="form-group">
+        <label>搜索任务</label>
+        <input type="text" id="taskSearchInput" placeholder="输入项目号或任务名称..." oninput="renderTasks()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
+      </div>
+      <div class="form-group">
         <label>项目筛选</label>
         <div class="dropdown-filter" id="filterProject"></div>
       </div>
@@ -244,6 +248,10 @@ tr:hover { background: var(--bg-light); }
       <span class="card-title">任务审阅</span>
     </div>
     <div class="filter-bar">
+      <div class="form-group">
+        <label>搜索任务</label>
+        <input type="text" id="reviewSearchInput" placeholder="输入项目号或任务名称..." oninput="renderReview()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
+      </div>
       <div class="form-group">
         <label>项目筛选</label>
         <div class="dropdown-filter" id="reviewFilterProject"></div>
@@ -501,25 +509,25 @@ function closeModalOverlay(e) {
 
 // ====== Excel-Style Dropdown Filter ======
 function initDropdown(containerId, items, selectedValues) {
-  var container = document.getElementById(containerId);
+  const container = document.getElementById(containerId);
   if (!container) return;
   selectedValues = selectedValues || [];
-  var summary = selectedValues.length === 0 ? '全部' : selectedValues.length + '项已选';
+  const summary = selectedValues.length === 0 ? '全部' : selectedValues.length + '项已选';
   container.innerHTML = '';
   container.dataset.selected = JSON.stringify(selectedValues);
 
-  var trigger = document.createElement('div');
+  const trigger = document.createElement('div');
   trigger.className = 'dropdown-trigger';
   trigger.textContent = summary;
   trigger.title = selectedValues.length > 0 ? selectedValues.join(', ') : '全部';
   trigger.onclick = function(e) { e.stopPropagation(); toggleDropdown(containerId); };
   container.appendChild(trigger);
 
-  var panel = document.createElement('div');
+  const panel = document.createElement('div');
   panel.className = 'dropdown-panel';
 
   items.forEach(function(item) {
-    var div = document.createElement('div');
+    const div = document.createElement('div');
     div.className = 'dropdown-item' + (selectedValues.indexOf(item) >= 0 ? ' checked' : '');
     div.textContent = item;
     div.onclick = function(e) {
@@ -530,15 +538,15 @@ function initDropdown(containerId, items, selectedValues) {
   });
 
   // Action buttons
-  var actions = document.createElement('div');
+  const actions = document.createElement('div');
   actions.className = 'dropdown-actions';
-  var selectAllBtn = document.createElement('button');
+  const selectAllBtn = document.createElement('button');
   selectAllBtn.className = 'btn btn-sm btn-outline';
   selectAllBtn.textContent = '全选';
   selectAllBtn.onclick = function(e) { e.stopPropagation(); selectAllDropdown(containerId, items); };
   actions.appendChild(selectAllBtn);
 
-  var clearBtn = document.createElement('button');
+  const clearBtn = document.createElement('button');
   clearBtn.className = 'btn btn-sm btn-outline';
   clearBtn.textContent = '清除';
   clearBtn.onclick = function(e) { e.stopPropagation(); clearDropdown(containerId, items); };
@@ -549,36 +557,36 @@ function initDropdown(containerId, items, selectedValues) {
 }
 
 function getDropdownValues(containerId) {
-  var container = document.getElementById(containerId);
+  const container = document.getElementById(containerId);
   if (!container || !container.dataset.selected) return [];
   try { return JSON.parse(container.dataset.selected); }
   catch(e) { return []; }
 }
 
 function toggleDropdown(containerId) {
-  var container = document.getElementById(containerId);
+  const container = document.getElementById(containerId);
   if (!container) return;
-  var isOpen = container.classList.contains('open');
+  const isOpen = container.classList.contains('open');
   // Close all dropdowns first
   document.querySelectorAll('.dropdown-filter.open').forEach(function(d) { d.classList.remove('open'); });
   if (!isOpen) container.classList.add('open');
 }
 
 function toggleDropdownItem(containerId, value) {
-  var container = document.getElementById(containerId);
-  var selected = getDropdownValues(containerId);
+  const container = document.getElementById(containerId);
+  const selected = getDropdownValues(containerId);
   var idx = selected.indexOf(value);
   if (idx >= 0) selected.splice(idx, 1);
   else selected.push(value);
   container.dataset.selected = JSON.stringify(selected);
 
   // Update summary
-  var trigger = container.querySelector('.dropdown-trigger');
+  const trigger = container.querySelector('.dropdown-trigger');
   trigger.textContent = selected.length === 0 ? '全部' : selected.length + '项已选';
   trigger.title = selected.length > 0 ? selected.join(', ') : '全部';
 
   // Update check marks
-  var items = container.querySelectorAll('.dropdown-item');
+  const items = container.querySelectorAll('.dropdown-item');
   items.forEach(function(el) {
     el.classList.toggle('checked', selected.indexOf(el.textContent) >= 0);
   });
@@ -589,9 +597,9 @@ function toggleDropdownItem(containerId, value) {
 }
 
 function selectAllDropdown(containerId, allItems) {
-  var container = document.getElementById(containerId);
+  const container = document.getElementById(containerId);
   container.dataset.selected = JSON.stringify(allItems.slice());
-  var trigger = container.querySelector('.dropdown-trigger');
+  const trigger = container.querySelector('.dropdown-trigger');
   trigger.textContent = allItems.length + '项已选';
   trigger.title = allItems.join(', ');
   container.querySelectorAll('.dropdown-item').forEach(function(el) {
@@ -602,9 +610,9 @@ function selectAllDropdown(containerId, allItems) {
 }
 
 function clearDropdown(containerId, allItems) {
-  var container = document.getElementById(containerId);
+  const container = document.getElementById(containerId);
   container.dataset.selected = '[]';
-  var trigger = container.querySelector('.dropdown-trigger');
+  const trigger = container.querySelector('.dropdown-trigger');
   trigger.textContent = '全部';
   trigger.title = '全部';
   container.querySelectorAll('.dropdown-item').forEach(function(el) {
@@ -723,23 +731,26 @@ function completeTask(id) {
   }
 }
 
-function getUniqueProjects() {
-  const data = loadData();
+function getUniqueProjectsFromData(data) {
   return [...new Set(data.tasks.map(t => t.projectName))].sort();
+}
+
+function getUniqueProjects() {
+  return getUniqueProjectsFromData(loadData());
 }
 
 function renderTasks() {
   const data = loadData();
 
   // Initialize/update project dropdown filter
-  var projects = getUniqueProjects();
+  var projects = getUniqueProjectsFromData(data);
   initDropdown('filterProject', projects, getDropdownValues('filterProject'));
-  var selectedProjects = getDropdownValues('filterProject');
+  const selectedProjects = getDropdownValues('filterProject');
 
   // Initialize/update status dropdown filter
-  var statuses = ['未开始', '进行中', '已完成', '已延期'];
+  const statuses = ['未开始', '进行中', '已完成', '已延期'];
   initDropdown('filterStatus', statuses, getDropdownValues('filterStatus'));
-  var selectedStatuses = getDropdownValues('filterStatus');
+  const selectedStatuses = getDropdownValues('filterStatus');
 
   // Stats
   const total = data.tasks.length;
@@ -754,6 +765,11 @@ function renderTasks() {
   `;
 
   let tasks = data.tasks;
+  // Search filter
+  const searchQuery = document.getElementById('taskSearchInput').value.trim().toLowerCase();
+  if (searchQuery) {
+    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(searchQuery) || t.taskName.toLowerCase().includes(searchQuery));
+  }
   if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
   if (selectedStatuses.length > 0) tasks = tasks.filter(t => selectedStatuses.includes(t.status));
 
@@ -920,12 +936,12 @@ function saveTempItem(tempId) {
   // 时长即延期时长，自动转换
   const delayHours = durationUnit === 'd' ? durationValue * 8 : durationValue;
 
-  if (!description) { alert('请填写事项描述'); return; }
+  if (!description) { showToast('请填写事项描述', 'error'); return; }
 
   let affectedTaskIds = [];
   if (impactType === 'specific') {
     affectedTaskIds = [...document.querySelectorAll('.temp-task-cb:checked')].map(cb => cb.value);
-    if (affectedTaskIds.length === 0) { alert('请至少选择一个任务'); return; }
+    if (affectedTaskIds.length === 0) { showToast('请至少选择一个任务', 'error'); return; }
   } else {
     const data = loadData();
     affectedTaskIds = data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
@@ -1132,7 +1148,7 @@ function renderReview() {
   const data = loadData();
 
   // Initialize/update project dropdown filter
-  const projects = getUniqueProjects();
+  const projects = getUniqueProjectsFromData(data);
   initDropdown('reviewFilterProject', projects, getDropdownValues('reviewFilterProject'));
   var selectedProjects = getDropdownValues('reviewFilterProject');
 
@@ -1140,6 +1156,11 @@ function renderReview() {
   const filterDelayed = document.getElementById('reviewFilterDelayed').value;
 
   let tasks = data.tasks;
+  // Search filter
+  const reviewSearchQuery = document.getElementById('reviewSearchInput').value.trim().toLowerCase();
+  if (reviewSearchQuery) {
+    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(reviewSearchQuery) || t.taskName.toLowerCase().includes(reviewSearchQuery));
+  }
   if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
   if (filterDelayed === 'yes') tasks = tasks.filter(t => t.delayRecords.length > 0);
 
@@ -1318,7 +1339,7 @@ function handleImportFile(event) {
 function previewImportData() {
   const format = document.getElementById('mImportFormat').value;
   const raw = document.getElementById('mImportData').value.trim();
-  if (!raw) { alert('请先粘贴或上传数据'); return; }
+  if (!raw) { showToast('请先粘贴或上传数据', 'error'); return; }
 
   importPreviewData = [];
   let errors = [];
@@ -1370,7 +1391,7 @@ function previewImportData() {
         importPreviewData.push({ projectName: item.projectName, taskName: item.taskName, startDate, plannedEndDate, status });
       });
     } catch {
-      alert('JSON 解析失败，请检查格式');
+      showToast('JSON 解析失败，请检查格式', 'error');
       return;
     }
   }
@@ -1403,7 +1424,7 @@ function previewImportData() {
 }
 
 function executeBatchImport() {
-  if (importPreviewData.length === 0) { alert('请先预览数据'); return; }
+  if (importPreviewData.length === 0) { showToast('请先预览数据', 'error'); return; }
   if (!confirm(`确定导入 ${importPreviewData.length} 条任务？`)) return;
 
   const data = loadData();
