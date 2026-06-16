@@ -1461,7 +1461,14 @@ function recalcTaskEndDate(task) {
   const lastAdjust = [...sorted].reverse().find(r => r.type === 'adjust');
   task.adjustedEndDate = lastAdjust ? (lastAdjust.adjustToDate || lastAdjust.newEndDate) : '';
 
-  if (task.status !== '已完成') task.status = '已延期';
+  if (task.status !== '已完成') {
+    const lastRecord = sorted[sorted.length - 1];
+    if (lastRecord.type !== 'adjust') {
+      task.status = '已延期';
+    } else if (task.status === '已延期') {
+      task.status = '进行中';
+    }
+  }
 }
 
 function showAdjustForm(taskId, recordId) {
