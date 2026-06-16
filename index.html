@@ -180,6 +180,30 @@ tr:hover { background: var(--bg-light); }
 .toast-info { background: var(--primary); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toast-out { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px); } }
+
+/* Archive path config */
+.archive-config { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.archive-path { font-size: 13px; color: var(--text); background: var(--bg-light); padding: 6px 12px; border-radius: 6px; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-path-empty { font-size: 13px; color: var(--text-muted); font-style: italic; }
+
+/* File upload / drag-drop zone */
+.drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg-light); }
+.drop-zone:hover, .drop-zone.drag-over { border-color: var(--primary); background: var(--bg-primary-light); }
+.drop-zone-text { font-size: 13px; color: var(--text-secondary); }
+.drop-zone-text strong { color: var(--primary); }
+.file-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.file-chip { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.file-chip-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip-size { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.file-chip-remove { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1; }
+.file-chip-remove:hover { color: var(--danger-dark); }
+
+/* Attachment display in detail */
+.attachment-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.attachment-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-light); border-radius: 6px; font-size: 13px; }
+.attachment-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-item-size { color: var(--text-muted); font-size: 11px; }
+.attachment-badge { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -274,6 +298,18 @@ tr:hover { background: var(--bg-light); }
 <div id="tab-data" class="tab-content">
   <div class="card">
     <div class="card-header">
+      <span class="card-title">文档附件存档</span>
+    </div>
+    <div class="archive-config">
+      <span style="font-size:13px; color:var(--text-secondary);">存档路径：</span>
+      <span id="archivePathDisplay" class="archive-path-empty">未设置</span>
+      <button class="btn btn-outline btn-sm" onclick="setArchivePath()">设置路径</button>
+      <button class="btn btn-outline btn-sm" onclick="reauthorizeArchivePath()" id="btnReauthorize" style="display:none;">重新授权</button>
+    </div>
+    <p style="font-size:12px; color:var(--text-muted); margin-top:8px;">选择本地文件夹后，创建临时事项时可添加附件，自动归档到 <code>&lt;日期&gt;_&lt;ID&gt;</code> 子文件夹中。</p>
+  </div>
+  <div class="card" style="margin-top:16px;">
+    <div class="card-header">
       <span class="card-title">数据管理</span>
     </div>
     <div style="display:flex; gap:12px; flex-wrap:wrap;">
@@ -343,6 +379,206 @@ function formatDate(d) {
     if (isNaN(date.getTime())) return d;
     return date.toISOString().split('T')[0];
   } catch { return d; }
+}
+
+// ====== Archive Path (File System Access API) ======
+const ARCHIVE_HANDLE_KEY = 'task-manager-archive-handle';
+var _archiveHandle = null;
+
+// Open IndexedDB to persist the directory handle
+function _openArchiveDB() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open('TaskManagerArchive', 1);
+    req.onupgradeneeded = function() { req.result.createObjectStore('handles'); };
+    req.onsuccess = function() { resolve(req.result); };
+    req.onerror = function() { reject(req.error); };
+  });
+}
+
+function _saveHandleToDB(handle) {
+  return _openArchiveDB().then(function(db) {
+    return new Promise(function(resolve, reject) {
+      var tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(handle, ARCHIVE_HANDLE_KEY);
+      tx.oncomplete = function() { db.close(); resolve(); };
+      tx.onerror = function() { db.close(); reject(tx.error); };
+    });
+  });
+}
+
+function _loadHandleFromDB() {
+  return _openArchiveDB().then(function(db) {
+    return new Promise(function(resolve, reject) {
+      var tx = db.transaction('handles', 'readonly');
+      var req = tx.objectStore('handles').get(ARCHIVE_HANDLE_KEY);
+      req.onsuccess = function() { db.close(); resolve(req.result); };
+      req.onerror = function() { db.close(); reject(req.error); };
+    });
+  });
+}
+
+// Ask user to pick a local folder as archive root
+async function setArchivePath() {
+  if (!window.showDirectoryPicker) {
+    showToast('当前浏览器不支持 File System Access API，请使用 Chrome 或 Edge', 'error');
+    return;
+  }
+  try {
+    var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    _archiveHandle = handle;
+    await _saveHandleToDB(handle);
+    updateArchivePathDisplay();
+    showToast('存档路径已设置');
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      showToast('设置存档路径失败: ' + e.message, 'error');
+    }
+  }
+}
+
+// Re-grant permission to previously saved handle
+async function reauthorizeArchivePath() {
+  if (!_archiveHandle) return;
+  try {
+    var opts = { mode: 'readwrite' };
+    var ok = await _archiveHandle.requestPermission(opts);
+    if (ok === 'granted') {
+      updateArchivePathDisplay();
+      showToast('授权已恢复');
+    } else {
+      showToast('授权被拒绝', 'error');
+    }
+  } catch (e) {
+    showToast('重新授权失败: ' + e.message, 'error');
+  }
+}
+
+function updateArchivePathDisplay() {
+  var display = document.getElementById('archivePathDisplay');
+  var reauthBtn = document.getElementById('btnReauthorize');
+  if (_archiveHandle) {
+    display.textContent = _archiveHandle.name;
+    display.className = 'archive-path';
+    reauthBtn.style.display = 'inline-block';
+  } else {
+    display.textContent = '未设置';
+    display.className = 'archive-path-empty';
+    reauthBtn.style.display = 'none';
+  }
+}
+
+// Restore handle from IndexedDB on page load
+async function initArchivePath() {
+  if (!window.showDirectoryPicker) return;
+  try {
+    var handle = await _loadHandleFromDB();
+    if (handle) {
+      var opts = { mode: 'readwrite' };
+      var ok = await handle.requestPermission(opts);
+      if (ok === 'granted') {
+        _archiveHandle = handle;
+      } else {
+        // Handle exists but permission denied: keep reference for reauthorization
+        _archiveHandle = handle;
+      }
+      updateArchivePathDisplay();
+    }
+  } catch (e) {
+    console.warn('Failed to restore archive handle:', e);
+  }
+}
+
+function hasArchivePath() {
+  return !!(_archiveHandle);
+}
+
+// Get or create subfolder for a temp item
+// Folder naming: {date}_{id}
+function getArchiveDirName(item) {
+  return (item.date || 'no-date') + '_' + item.id;
+}
+
+async function _getSubDirHandle(item) {
+  if (!_archiveHandle) return null;
+  var dirName = getArchiveDirName(item);
+  try {
+    return await _archiveHandle.getDirectoryHandle(dirName, { create: true });
+  } catch (e) {
+    console.error('Failed to get/create subfolder:', e);
+    return null;
+  }
+}
+
+// Write files to the item's archive subfolder
+async function saveAttachmentsToDisk(item, files) {
+  if (!_archiveHandle || !files || files.length === 0) return [];
+  var subDir = await _getSubDirHandle(item);
+  if (!subDir) return [];
+  var saved = [];
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    try {
+      var fileHandle = await subDir.getFileHandle(f.name, { create: true });
+      var writable = await fileHandle.createWritable();
+      await writable.write(f);
+      await writable.close();
+      saved.push({ name: f.name, size: f.size, type: f.type });
+    } catch (e) {
+      console.error('Failed to save file ' + f.name + ':', e);
+    }
+  }
+  return saved;
+}
+
+// List files in an item's archive subfolder
+async function listAttachments(item) {
+  if (!_archiveHandle) return [];
+  var dirName = getArchiveDirName(item);
+  try {
+    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
+    var result = [];
+    var entries = subDir.values();
+    var entry = await entries.next();
+    while (!entry.done) {
+      var fileHandle = entry.value;
+      if (fileHandle.kind === 'file') {
+        var f = await fileHandle.getFile();
+        result.push({ name: f.name, size: f.size, type: f.type });
+      }
+      entry = await entries.next();
+    }
+    return result;
+  } catch (e) {
+    return [];
+  }
+}
+
+// Delete an item's archive subfolder
+async function deleteAttachmentsFolder(item) {
+  if (!_archiveHandle) return;
+  var dirName = getArchiveDirName(item);
+  try {
+    await _archiveHandle.removeEntry(dirName, { recursive: true });
+  } catch (e) {
+    // Folder may not exist, ignore
+  }
+}
+
+// Open a file from an item's archive subfolder
+async function openAttachment(item, filename) {
+  if (!_archiveHandle) return;
+  var dirName = getArchiveDirName(item);
+  try {
+    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
+    var fileHandle = await subDir.getFileHandle(filename);
+    var file = await fileHandle.getFile();
+    var url = URL.createObjectURL(file);
+    window.open(url, '_blank');
+    // Clean up the blob URL after a delay
+    setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+  } catch (e) {
+    showToast('无法打开文件: ' + e.message, 'error');
+  }
 }
 
 // ====== Holiday & Working Day Logic ======
@@ -507,7 +743,7 @@ function closeModal() {
   document.getElementById('modalOverlay').classList.remove('active');
 }
 function closeModalOverlay(e) {
-  if (e.target === e.currentTarget) { _pendingDelayModalTaskId = null; closeModal(); }
+  if (e.target === e.currentTarget) { _pendingDelayModalTaskId = null; _pendingFiles = []; closeModal(); }
 }
 
 // ====== Excel-Style Dropdown Filter ======
@@ -838,7 +1074,12 @@ function showTaskDelays(taskId) {
 
   let timelineHtml = '<div class="timeline">';
   let accumulatedHours = 0;
-  task.delayRecords.forEach(record => {
+  // Sort by date for correct cumulative calculation
+  const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
+  sorted.forEach(record => {
+    if (record.type === 'adjust') {
+      accumulatedHours = 0;
+    }
     if (record.type !== 'adjust') {
       accumulatedHours += (record.delayHours || 0);
     }
@@ -880,6 +1121,9 @@ function editTempItemFromDelay(tempItemId, taskId) {
   showTempForm(tempItemId);
 }
 
+// Track pending files for temp item form
+var _pendingFiles = [];
+
 // ====== Temp Item Management ======
 function showTempForm(tempId) {
   const data = loadData();
@@ -891,10 +1135,38 @@ function showTempForm(tempId) {
     `<label><input type="checkbox" value="${t.id}" class="temp-task-cb" ${item && item.affectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
 
+  // Reset pending files; for edit, pre-populate with existing attachments (as metadata, not actual File objects)
+  _pendingFiles = [];
+  var existingAttachmentsHtml = '';
+  if (item && item.attachments && item.attachments.length > 0) {
+    existingAttachmentsHtml = item.attachments.map(function(a, idx) {
+      return `<div class="file-chip">
+        <span class="file-chip-name" title="${a.name}">📎 ${a.name}</span>
+        <span class="file-chip-size">${formatFileSize(a.size)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  var uploadSection = '';
+  if (hasArchivePath()) {
+    uploadSection = `
+    <div class="form-row">
+      <div class="form-group" style="min-width:100%;">
+        <label>附件 ${item && item.attachments && item.attachments.length > 0 ? '<span style="color:var(--text-muted); font-weight:400;">（修改时保留已有附件，关闭弹窗前可添加新附件）</span>' : ''}</label>
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+          <div class="drop-zone-text">拖拽文件到此处或<strong>点击选择</strong></div>
+          <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(event)">
+        </div>
+        <div class="file-list" id="pendingFileList"></div>
+        ${existingAttachmentsHtml ? '<div style="margin-top:8px; font-size:12px; color:var(--text-secondary);">已有附件：</div>' + '<div class="file-list">' + existingAttachmentsHtml + '</div>' : ''}
+      </div>
+    </div>`;
+  }
+
   const html = `
     <div class="modal-header">
       <h3>${title}</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
+      <button class="modal-close" onclick="closeTempForm()">&times;</button>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -935,12 +1207,76 @@ function showTempForm(tempId) {
           '<p style="color:#999; font-size:13px; padding:8px;">暂无未完成任务</p>'}
       </div>
     </div>
+    ${uploadSection}
     <div style="text-align:right; margin-top:16px;">
-      <button class="btn btn-outline" onclick="_pendingDelayModalTaskId=null;closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-outline" onclick="closeTempForm()" style="margin-right:8px;">取消</button>
       <button class="btn btn-primary" onclick="saveTempItem('${tempId || ''}')">保存并应用延期</button>
     </div>
   `;
   openModal(html);
+
+  // Setup drag-drop after modal is rendered
+  if (hasArchivePath()) {
+    setTimeout(function() {
+      var dropZone = document.getElementById('dropZone');
+      if (dropZone) {
+        dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('drag-over'); });
+        dropZone.addEventListener('drop', function(e) {
+          e.preventDefault();
+          dropZone.classList.remove('drag-over');
+          addPendingFiles(e.dataTransfer.files);
+        });
+      }
+    }, 50);
+  }
+}
+
+function closeTempForm() {
+  _pendingDelayModalTaskId = null;
+  _pendingFiles = [];
+  closeModal();
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB'];
+  var i = 0;
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+  return bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
+function handleFileSelect(event) {
+  addPendingFiles(event.target.files);
+  event.target.value = '';
+}
+
+function addPendingFiles(fileList) {
+  for (var i = 0; i < fileList.length; i++) {
+    _pendingFiles.push(fileList[i]);
+  }
+  renderPendingFiles();
+}
+
+function removePendingFile(index) {
+  _pendingFiles.splice(index, 1);
+  renderPendingFiles();
+}
+
+function renderPendingFiles() {
+  var list = document.getElementById('pendingFileList');
+  if (!list) return;
+  if (_pendingFiles.length === 0) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = _pendingFiles.map(function(f, idx) {
+    return '<div class="file-chip">' +
+      '<span class="file-chip-name" title="' + f.name + '">📎 ' + f.name + '</span>' +
+      '<span class="file-chip-size">' + formatFileSize(f.size) + '</span>' +
+      '<button class="file-chip-remove" onclick="removePendingFile(' + idx + ')" title="移除">×</button>' +
+      '</div>';
+  }).join('');
 }
 
 function toggleTempTaskSelect() {
@@ -948,7 +1284,7 @@ function toggleTempTaskSelect() {
   document.getElementById('mTempTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
 }
 
-function saveTempItem(tempId) {
+async function saveTempItem(tempId) {
 try {
   const date = document.getElementById('mTempDate').value;
   const durationValue = parseFloat(document.getElementById('mTempDuration').value) || 0;
@@ -1010,19 +1346,37 @@ try {
       oldItem.description = description;
       oldItem.impactType = impactType;
       oldItem.affectedTaskIds = affectedTaskIds;
-      // 不再存储独立的 delayValue/delayUnit，delayHours 直接从 duration 计算
+
+      // Save new pending files to disk
+      if (_pendingFiles.length > 0) {
+        var newSaved = await saveAttachmentsToDisk(oldItem, _pendingFiles);
+        if (newSaved.length > 0) {
+          oldItem.attachments = (oldItem.attachments || []).concat(newSaved);
+        }
+      }
+      // If date changed, attachments are still in old folder - keep as-is
     }
   } else {
     const newId = genId();
-    data.tempItems.push({
+    var newItem = {
       id: newId,
       date,
       durationValue,
       durationUnit,
       description,
       impactType,
-      affectedTaskIds
-    });
+      affectedTaskIds,
+      attachments: []
+    };
+    data.tempItems.push(newItem);
+
+    // Save pending files to disk
+    if (_pendingFiles.length > 0) {
+      var saved = await saveAttachmentsToDisk(newItem, _pendingFiles);
+      if (saved.length > 0) {
+        newItem.attachments = saved;
+      }
+    }
 
     affectedTaskIds.forEach(tid => {
       const task = data.tasks.find(t => t.id === tid);
@@ -1041,6 +1395,7 @@ try {
   }
 
   saveData(data);
+  _pendingFiles = [];
   closeModal();
   showToast("临时事项已保存");
   renderTempItems();
@@ -1056,26 +1411,41 @@ try {
 }
 
 function recalcTaskEndDate(task) {
-  const baseDate = task.adjustedEndDate || task.plannedEndDate;
   if (task.delayRecords.length === 0) {
-    task.currentEndDate = baseDate;
+    task.currentEndDate = task.adjustedEndDate || task.plannedEndDate;
     if (task.status === '已延期') task.status = '未开始';
-  } else {
-    const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
-    let accumulatedHours = 0;
-
-    sorted.forEach(r => {
-      if (r.type !== 'adjust') {
-        accumulatedHours += (r.delayHours || 0);
-      }
-      const workDays = hoursToWorkingDaysOffset(accumulatedHours);
-      const newEnd = addWorkingDays(baseDate, workDays);
-      r.newEndDate = newEnd;
-    });
-
-    task.currentEndDate = sorted.length > 0 ? sorted[sorted.length - 1].newEndDate : baseDate;
-    if (task.status !== '已完成') task.status = '已延期';
+    return;
   }
+
+  // Sort records by date
+  const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
+
+  // Split calculation by plan adjustments: each segment has its own baseline
+  // and accumulatedHours resets at each plan adjustment boundary
+  let segmentBaseline = task.plannedEndDate;
+  let accumulatedHours = 0;
+
+  sorted.forEach(r => {
+    if (r.type === 'adjust') {
+      // Plan adjustment: reset accumulated hours, switch to new baseline
+      accumulatedHours = 0;
+      segmentBaseline = r.adjustToDate || task.adjustedEndDate || task.plannedEndDate;
+    }
+    if (r.type !== 'adjust') {
+      accumulatedHours += (r.delayHours || 0);
+    }
+    const workDays = hoursToWorkingDaysOffset(accumulatedHours);
+    const newEnd = addWorkingDays(segmentBaseline, workDays);
+    r.newEndDate = newEnd;
+  });
+
+  task.currentEndDate = sorted[sorted.length - 1].newEndDate;
+
+  // Sync adjustedEndDate to the last plan adjustment's target date
+  const lastAdjust = [...sorted].reverse().find(r => r.type === 'adjust');
+  task.adjustedEndDate = lastAdjust ? (lastAdjust.adjustToDate || lastAdjust.newEndDate) : '';
+
+  if (task.status !== '已完成') task.status = '已延期';
 }
 
 function showAdjustForm(taskId, recordId) {
@@ -1083,7 +1453,7 @@ function showAdjustForm(taskId, recordId) {
   const task = data.tasks.find(t => t.id === taskId);
   if (!task) return;
   const record = recordId ? task.delayRecords.find(r => r.id === recordId) : null;
-  const baseDate = record ? (record.newEndDate || task.adjustedEndDate || task.plannedEndDate) : (task.adjustedEndDate || task.plannedEndDate);
+  const baseDate = record ? (record.adjustToDate || record.newEndDate || task.adjustedEndDate || task.plannedEndDate) : (task.adjustedEndDate || task.plannedEndDate);
   const reason = record ? (record.reason === '计划调整' ? '' : record.reason) : '';
   const title = record ? '编辑计划调整' : '计划调整';
   const btnText = record ? '确认修改' : '确认调整';
@@ -1134,6 +1504,7 @@ function saveAdjustment(taskId) {
     id: genId(),
     date: new Date().toISOString().split('T')[0],
     delayHours: 0,
+    adjustToDate: newDate,
     newEndDate: '',
     causedByTempItemId: null,
     reason: reason || '计划调整',
@@ -1161,6 +1532,7 @@ function saveAdjustEdit(taskId, recordId) {
   const record = task.delayRecords.find(r => r.id === recordId);
   if (record) {
     record.date = new Date().toISOString().split('T')[0];
+    record.adjustToDate = newDate;
     record.newEndDate = newDate;
     record.reason = reason || '计划调整';
   }
@@ -1178,7 +1550,7 @@ function deleteAdjustRecord(taskId, recordId) {
   if (!task) return;
   task.delayRecords = task.delayRecords.filter(r => r.id !== recordId);
   const lastAdjust = [...task.delayRecords].reverse().find(r => r.type === 'adjust');
-  task.adjustedEndDate = lastAdjust ? lastAdjust.newEndDate || lastAdjust.reason : '';
+  task.adjustedEndDate = lastAdjust ? (lastAdjust.adjustToDate || lastAdjust.newEndDate) : '';
   if (!lastAdjust) task.adjustedEndDate = '';
   recalcTaskEndDate(task);
   saveData(data);
@@ -1188,7 +1560,7 @@ function deleteAdjustRecord(taskId, recordId) {
 }
 
 function deleteTempItem(id) {
-  if (!confirm('确定删除此临时事项？已关联的任务延期记录将被清除。')) return;
+  if (!confirm('确定删除此临时事项？已关联的任务延期记录和附件将被清除。')) return;
   const data = loadData();
   const item = data.tempItems.find(t => t.id === id);
   if (item) {
@@ -1199,6 +1571,8 @@ function deleteTempItem(id) {
         recalcTaskEndDate(task);
       }
     });
+    // Delete attachments folder from disk
+    deleteAttachmentsFolder(item);
   }
   data.tempItems = data.tempItems.filter(t => t.id !== id);
   saveData(data);
@@ -1213,7 +1587,7 @@ function renderTempItems() {
     return;
   }
 
-  let html = '<table><thead><tr><th>日期</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>操作</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>日期</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   data.tempItems.forEach(item => {
     const affectedNames = item.affectedTaskIds.map(tid => {
       const task = data.tasks.find(t => t.id === tid);
@@ -1225,12 +1599,18 @@ function renderTempItems() {
     const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
     const delayDisplay = `${itemDelayHours}h → ${delayWorkdays} 工作日`;
 
+    const attachCount = item.attachments ? item.attachments.length : 0;
+    const attachCell = attachCount > 0
+      ? `<span class="attachment-badge" onclick="showTempItemDetail('${item.id}')" style="cursor:pointer;" title="点击查看详情">📎 ${attachCount}</span>`
+      : (hasArchivePath() ? '-' : '<span style="color:var(--text-muted); font-size:11px;">未配置</span>');
+
     html += `<tr>
       <td>${item.date}</td>
       <td>${durationDisplay}</td>
       <td title="${item.description}">${item.description.length > 30 ? item.description.substring(0, 30) + '...' : item.description}</td>
       <td>${delayDisplay}</td>
       <td style="max-width:300px;">${affectedNames || '-'}</td>
+      <td>${attachCell}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="showTempForm('${item.id}')">编辑</button>
         <button class="btn btn-danger btn-sm" onclick="deleteTempItem('${item.id}')">删除</button>
@@ -1256,6 +1636,32 @@ function showTempItemDetail(tempId) {
   const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
   const delayDisplay = `${itemDelayHours} 小时 → 延期 ${delayWorkdays} 工作日`;
 
+  // Build attachment section
+  var attachmentSection = '';
+  var hasArchive = hasArchivePath();
+  var attachCount = item.attachments ? item.attachments.length : 0;
+
+  if (hasArchive && attachCount > 0) {
+    var attachItems = item.attachments.map(function(a) {
+      return '<div class="attachment-item">' +
+        '<span class="attachment-item-name" title="' + a.name + '">📎 ' + a.name + '</span>' +
+        '<span class="attachment-item-size">' + formatFileSize(a.size) + '</span>' +
+        '<button class="btn btn-outline btn-sm" onclick="openAttachmentById(\'' + tempId + '\',\'' + a.name.replace(/'/g, "\\'") + '\')">打开</button>' +
+        '</div>';
+    }).join('');
+    attachmentSection = `
+    <div class="form-group" style="margin-top:12px;">
+      <label>附件 (${attachCount} 个)</label>
+      <div class="attachment-list">${attachItems}</div>
+    </div>`;
+  } else if (hasArchive) {
+    attachmentSection = `
+    <div class="form-group" style="margin-top:12px;">
+      <label>附件</label>
+      <p style="color:var(--text-muted); font-size:13px;">无附件</p>
+    </div>`;
+  }
+
   openModal(`
     <div class="modal-header">
       <h3>临时事项详情</h3>
@@ -1271,7 +1677,14 @@ function showTempItemDetail(tempId) {
     <div class="form-group"><label>受影响的任务：</label>
       <ul style="margin-top:6px; padding-left:20px; font-size:13px;">${affectedNames || '<li>无</li>'}</ul>
     </div>
+    ${attachmentSection}
   `);
+}
+
+function openAttachmentById(tempId, filename) {
+  var data = loadData();
+  var item = data.tempItems.find(function(t) { return t.id === tempId; });
+  if (item) { openAttachment(item, filename); }
 }
 
 // ====== Review ======
@@ -1588,6 +2001,8 @@ async function init() {
   renderTasks();
   // 异步加载官方节假日数据
   await loadHolidaysFromAPI();
+  // 恢复存档路径
+  initArchivePath();
 }
 init();
 </script>
