@@ -133,7 +133,8 @@ PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中
 
 | 文件 | 说明 |
 |------|------|
-| `index.html` | 主应用文件 |
+| `index.html` | 主应用文件（HTML + CSS + JS 全部内联） |
+| `AGENT.md` | Agent 指南（供 AI 修改参考） |
 | `DESIGN.md` | 技术方案文档 |
 | `README.md` | 项目说明文档 |
 | `sample-data.json` | 完整示例数据 |

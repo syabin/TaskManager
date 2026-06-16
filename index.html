@@ -567,6 +567,27 @@ async function _getSubDirHandle(item) {
 }
 
 // Write files to the item's archive subfolder
+async function getUniqueFileName(subDir, name) {
+  var base = name;
+  var ext = '';
+  var dotIdx = name.lastIndexOf('.');
+  if (dotIdx > 0) {
+    base = name.substring(0, dotIdx);
+    ext = name.substring(dotIdx);
+  }
+  var candidate = name;
+  var counter = 1;
+  while (true) {
+    try {
+      await subDir.getFileHandle(candidate);
+      counter++;
+      candidate = base + '(' + counter + ')' + ext;
+    } catch (e) {
+      return candidate;
+    }
+  }
+}
+
 async function saveAttachmentsToDisk(item, files) {
   if (!_archiveHandle || !files || files.length === 0) return [];
   var subDir = await _getSubDirHandle(item);
@@ -575,11 +596,12 @@ async function saveAttachmentsToDisk(item, files) {
   for (var i = 0; i < files.length; i++) {
     var f = files[i];
     try {
-      var fileHandle = await subDir.getFileHandle(f.name, { create: true });
+      var uniqueName = await getUniqueFileName(subDir, f.name);
+      var fileHandle = await subDir.getFileHandle(uniqueName, { create: true });
       var writable = await fileHandle.createWritable();
       await writable.write(f);
       await writable.close();
-      saved.push({ name: f.name, size: f.size, type: f.type });
+      saved.push({ name: uniqueName, size: f.size, type: f.type });
     } catch (e) {
       console.error('Failed to save file ' + f.name + ':', e);
     }
@@ -631,11 +653,38 @@ async function openAttachment(item, filename) {
     var file = await fileHandle.getFile();
     var url = URL.createObjectURL(file);
     window.open(url, '_blank');
-    // Clean up the blob URL after a delay
     setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
   } catch (e) {
     showToast('无法打开文件: ' + e.message, 'error');
   }
+}
+
+// Delete a single attachment file from disk and metadata
+async function deleteAttachmentFile(item, filename) {
+  if (!_archiveHandle) return;
+  var dirName = getArchiveDirName(item);
+  try {
+    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
+    await subDir.removeEntry(filename);
+  } catch (e) {
+    console.warn('Failed to delete file from disk:', e);
+  }
+  // Update metadata
+  if (item.attachments) {
+    item.attachments = item.attachments.filter(function(a) { return a.name !== filename; });
+  }
+}
+
+function deleteAttachmentById(tempId, filename) {
+  var data = loadData();
+  var item = data.tempItems.find(function(t) { return t.id === tempId; });
+  if (!item) return;
+  if (!confirm('确定删除附件 "' + filename + '"？')) return;
+  deleteAttachmentFile(item, filename).then(function() {
+    saveData(data);
+    showToast('已删除附件: ' + filename);
+    showTempItemDetail(tempId);
+  });
 }
 
 // ====== Holiday & Working Day Logic ======
@@ -1293,6 +1342,7 @@ function showTempForm(tempId) {
       return `<div class="file-chip">
         <span class="file-chip-name" title="${a.name}">📎 ${a.name}</span>
         <span class="file-chip-size">${formatFileSize(a.size)}</span>
+        <button class="file-chip-remove" onclick="removeExistingAttachment('${tempId}','${a.name.replace(/'/g, "\\'")}')" title="删除附件">×</button>
       </div>`;
     }).join('');
   }
@@ -1450,6 +1500,18 @@ function renderPendingFiles() {
       '<button class="file-chip-remove" onclick="removePendingFile(' + idx + ')" title="移除">×</button>' +
       '</div>';
   }).join('');
+}
+
+function removeExistingAttachment(tempId, filename) {
+  if (!confirm('确定删除附件 "' + filename + '"？')) return;
+  var data = loadData();
+  var item = data.tempItems.find(function(t) { return t.id === tempId; });
+  if (!item) return;
+  deleteAttachmentFile(item, filename).then(function() {
+    saveData(data);
+    showToast('已删除附件: ' + filename);
+    showTempForm(tempId);
+  });
 }
 
 function toggleTempTaskSelect() {
@@ -1852,6 +1914,7 @@ function showTempItemDetail(tempId) {
         '<span class="attachment-item-name" title="' + a.name + '">📎 ' + a.name + '</span>' +
         '<span class="attachment-item-size">' + formatFileSize(a.size) + '</span>' +
         '<button class="btn btn-outline btn-sm" onclick="openAttachmentById(\'' + tempId + '\',\'' + a.name.replace(/'/g, "\\'") + '\')">打开</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="deleteAttachmentById(\'' + tempId + '\',\'' + a.name.replace(/'/g, "\\'") + '\')">删除</button>' +
         '</div>';
     }).join('');
     attachmentSection = `
