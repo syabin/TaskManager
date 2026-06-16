@@ -41,7 +41,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tab-btn { padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 3px solid transparent; transition: all 0.2s; }
 .tab-btn:hover { color: var(--primary); }
 .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
-.tab-content { display: none; padding: 24px; max-width: 1500px; margin: 0 auto; }
+.tab-content { display: none; padding: 24px; max-width: none; margin: 0 auto; }
 .tab-content.active { display: block; }
 
 .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
@@ -98,21 +98,26 @@ tr:hover { background: var(--bg-light); }
 .timeline-desc { font-size: 13px; margin-top: 4px; }
 
 .project-group { margin-bottom: 20px; }
-.project-group table { width: 100%; }
-.project-group th:nth-child(1) { min-width: 180px; }
-.project-group th:nth-child(2),
-.project-group th:nth-child(3),
-.project-group th:nth-child(4) { min-width: 100px; }
-.project-group th:nth-child(5) { min-width: 80px; }
-.project-group th:nth-child(6) { min-width: 70px; }
-.project-group th:nth-child(7) { min-width: 50px; }
+.project-group table { table-layout: fixed; width: 100%; }
+.project-group th:nth-child(1) { width: 50px; }
+.project-group th:nth-child(2) { width: 98px; }
+.project-group th:nth-child(3) { width: 180px; }
+.project-group th:nth-child(4),
+.project-group th:nth-child(5),
+.project-group th:nth-child(6),
+.project-group th:nth-child(7) { width: 50px; }
+.project-group th:nth-child(8) { width: 80px; }
+.project-group th:nth-child(9) { width: 80px; }
+.project-group th:nth-child(10) { width: 120px; }
+.project-group td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid var(--bg-primary-light); }
 
 .empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
 .empty-state p { margin-bottom: 12px; }
 
 .task-name-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.date-cell { width: 100px; min-width: 100px; white-space: nowrap; text-align: center; }
+.project-name-cell { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.date-cell { white-space: nowrap; text-align: center; }
 
 .impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
 .expand-link { display: inline-block; color: var(--primary); font-size: 12px; cursor: pointer; margin-left: 4px; user-select: none; }
@@ -238,7 +243,7 @@ tr:hover { background: var(--bg-light); }
     <div class="filter-bar">
       <div class="form-group">
         <label>搜索任务</label>
-        <input type="text" id="taskSearchInput" placeholder="输入项目号或任务名称..." oninput="renderTasks()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
+        <input type="text" id="taskSearchInput" placeholder="输入项目号、项目名称或任务名称..." oninput="renderTasks()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
       </div>
       <div class="form-group">
         <label>项目筛选</label>
@@ -330,7 +335,7 @@ tr:hover { background: var(--bg-light); }
 </div>
 
 <!-- Modal -->
-<div class="modal-overlay" id="modalOverlay" onclick="closeModalOverlay(event)">
+<div class="modal-overlay" id="modalOverlay">>
   <div class="modal" id="modalContent"></div>
 </div>
 
@@ -396,6 +401,30 @@ function formatDate(d) {
     if (isNaN(date.getTime())) return d;
     return date.toISOString().split('T')[0];
   } catch { return d; }
+}
+
+// Normalize various date formats to YYYY-MM-DD, returns '' if unrecognized
+function normalizeDate(str) {
+  if (!str || typeof str !== 'string') return '';
+  var s = str.trim();
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // YYYY/MM/DD or YYYY.MM.DD
+  var m = s.match(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/);
+  if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+  // YYYY年MM月DD日
+  m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日$/);
+  if (m) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+  // MM/DD/YYYY or MM-DD-YYYY
+  m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (m) return m[3] + '-' + m[1].padStart(2, '0') + '-' + m[2].padStart(2, '0');
+  // DD.MM.YYYY
+  m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  // DD/MM/YYYY
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  return '';
 }
 
 // ====== Archive Path (File System Access API) ======
@@ -756,10 +785,9 @@ function openModal(html) {
   document.getElementById('modalOverlay').classList.add('active');
 }
 function closeModal() {
+  _pendingDelayModalTaskId = null;
+  _pendingFiles = [];
   document.getElementById('modalOverlay').classList.remove('active');
-}
-function closeModalOverlay(e) {
-  if (e.target === e.currentTarget) { _pendingDelayModalTaskId = null; _pendingFiles = []; closeModal(); }
 }
 
 // ====== Excel-Style Dropdown Filter ======
@@ -904,7 +932,11 @@ function showTaskForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>项目号 *</label>
-        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001">
+        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001" oninput="autoFillProjectTitle()">
+      </div>
+      <div class="form-group">
+        <label>项目名称</label>
+        <input type="text" id="mTaskProjectTitle" value="${task ? (task.projectTitle || '') : ''}" placeholder="项目描述名称">
       </div>
       <div class="form-group">
         <label>任务名称 *</label>
@@ -935,8 +967,21 @@ function showTaskForm(taskId) {
   openModal(html);
 }
 
+// Auto-fill project title when typing a known project code
+function autoFillProjectTitle() {
+  const input = document.getElementById('mTaskProject');
+  const titleInput = document.getElementById('mTaskProjectTitle');
+  if (!input || !titleInput) return;
+  const code = input.value.trim();
+  if (!code) return;
+  const data = loadData();
+  const match = data.tasks.find(t => t.projectName === code && t.projectTitle);
+  titleInput.value = match ? match.projectTitle : '';
+}
+
 function saveTask(taskId) {
   const projectName = document.getElementById('mTaskProject').value.trim();
+  const projectTitle = document.getElementById('mTaskProjectTitle').value.trim();
   const taskName = document.getElementById('mTaskName').value.trim();
   const startDate = document.getElementById('mTaskStart').value;
   const plannedEndDate = document.getElementById('mTaskEnd').value;
@@ -949,6 +994,7 @@ function saveTask(taskId) {
     const task = data.tasks.find(t => t.id === taskId);
     if (task) {
       task.projectName = projectName;
+      task.projectTitle = projectTitle;
       task.taskName = taskName;
       task.startDate = startDate;
       task.plannedEndDate = plannedEndDate;
@@ -958,6 +1004,7 @@ function saveTask(taskId) {
     data.tasks.push({
       id: genId(),
       projectName,
+      projectTitle,
       taskName,
       startDate,
       plannedEndDate,
@@ -1033,7 +1080,7 @@ function renderTasks() {
   // Search filter
   const searchQuery = document.getElementById('taskSearchInput').value.trim().toLowerCase();
   if (searchQuery) {
-    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(searchQuery) || t.taskName.toLowerCase().includes(searchQuery));
+    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(searchQuery) || (t.projectTitle && t.projectTitle.toLowerCase().includes(searchQuery)) || t.taskName.toLowerCase().includes(searchQuery));
   }
   if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
   if (selectedStatuses.length > 0) tasks = tasks.filter(t => selectedStatuses.includes(t.status));
@@ -1057,17 +1104,20 @@ function renderTasks() {
   for (const [proj, projTasks] of Object.entries(groups)) {
     // Skip projects where all tasks are completed (when toggle is on)
     if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
-    html += `<div class="project-group"><div class="project-group-title">${proj}</div><table>
-      <thead><tr><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
+    const projTitle = projTasks[0].projectTitle || '';
+    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}</div><table>
+      <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
       const delayCount = t.delayRecords.length;
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
       html += `<tr>
+        <td>${t.projectName}</td>
+        <td class="project-name-cell" title="${t.projectTitle || ''}">${t.projectTitle || '-'}</td>
         <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
-        <td class="date-cell">${formatDate(t.startDate)}</td>
-        <td class="date-cell">${formatDate(t.plannedEndDate)}</td>
-        <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
-        <td class="date-cell" style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}">${formatDate(t.currentEndDate)}</td>
+        <td class="date-cell" title="${formatDate(t.startDate)}">${formatDate(t.startDate)}</td>
+        <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
+        <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
+        <td class="date-cell" style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
         <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
         <td>${delayCount > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次记录</span>` : '-'}</td>
         <td>
@@ -1751,7 +1801,7 @@ function renderReview() {
   // Search filter
   const reviewSearchQuery = document.getElementById('reviewSearchInput').value.trim().toLowerCase();
   if (reviewSearchQuery) {
-    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(reviewSearchQuery) || t.taskName.toLowerCase().includes(reviewSearchQuery));
+    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(reviewSearchQuery) || (t.projectTitle && t.projectTitle.toLowerCase().includes(reviewSearchQuery)) || t.taskName.toLowerCase().includes(reviewSearchQuery));
   }
   if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
   if (filterDelayed === 'yes') tasks = tasks.filter(t => t.delayRecords.length > 0);
@@ -1761,7 +1811,7 @@ function renderReview() {
     return;
   }
 
-  let html = '<table><thead><tr><th>项目号</th><th>任务名称</th><th>计划完成</th><th>计划调整</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>计划完成</th><th>计划调整</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
   tasks.forEach(t => {
     const delayCount = t.delayRecords.length;
     let delayCell = '-';
@@ -1770,10 +1820,11 @@ function renderReview() {
     }
     html += `<tr>
       <td>${t.projectName}</td>
+      <td class="project-name-cell" title="${t.projectTitle || ''}">${t.projectTitle || '-'}</td>
       <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
-      <td class="date-cell">${formatDate(t.plannedEndDate)}</td>
-      <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
-      <td class="date-cell">${formatDate(t.currentEndDate)}</td>
+      <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
+      <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
+      <td class="date-cell" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
       <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
       <td>${delayCell}</td>
     </tr>`;
@@ -1874,22 +1925,25 @@ function showBatchImport() {
     <div id="importHelpCSV" class="import-format-help">
       <strong>CSV 格式说明：</strong><br>
       第一行为表头（可选），数据从第二行开始。列顺序：<br>
-      <code>项目号</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br><br>
+      <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br>
+      支持逗号、Tab、分号、竖线分隔。<br>
+      日期支持：<code>2024-06-01</code> <code>2024/06/01</code> <code>2024.06.01</code> <code>2024年06月01日</code> <code>06/01/2024</code> <code>01.06.2024</code><br><br>
       <strong>示例：</strong><br>
-      <code>PRJ-001,需求分析,2024-06-01,2024-06-15,未开始</code><br>
-      <code>PRJ-001,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
+      <code>PRJ-001,,需求分析,2024-06-01,2024-06-15,未开始</code><br>
+      <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
       <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
     </div>
     <div id="importHelpJSON" class="import-format-help" style="display:none;">
       <strong>JSON 格式说明：</strong><br>
       数组格式，每个元素包含以下字段：<br>
       <code>projectName</code> 项目号（必填）<br>
+      <code>projectTitle</code> 项目名称（可选）<br>
       <code>taskName</code> 任务名称（必填）<br>
-      <code>startDate</code> 开始时间（YYYY-MM-DD）<br>
-      <code>plannedEndDate</code> 计划完成时间（YYYY-MM-DD）<br>
+      <code>startDate</code> 开始时间<br>
+      <code>plannedEndDate</code> 计划完成时间<br>
       <code>status</code> 任务状态<br><br>
       <strong>示例：</strong><br>
-      <code>[{"projectName":"PRJ-001","taskName":"需求分析","startDate":"2024-06-01","plannedEndDate":"2024-06-15","status":"未开始"}]</code>
+      <code>[{"projectName":"PRJ-001","projectTitle":"需求管理平台","taskName":"需求分析","startDate":"2024-06-01","plannedEndDate":"2024-06-15","status":"未开始"}]</code>
     </div>
     <div class="form-row">
       <div class="form-group" style="min-width:100%;">
@@ -1952,27 +2006,52 @@ function previewImportData() {
         startIdx = 1;
       }
     }
+    // Auto-detect delimiter: check tab, comma, semicolon, pipe
+    const sampleLine = lines[Math.min(startIdx, lines.length - 1)] || '';
+    const delimiters = ['\t', ',', ';', '|'];
+    let bestDelim = ',';
+    let bestCount = 0;
+    delimiters.forEach(function(d) {
+      const count = sampleLine.split(d).length;
+      if (count > bestCount) { bestCount = count; bestDelim = d; }
+    });
     for (let i = startIdx; i < lines.length; i++) {
-      const parts = lines[i].split(',').map(p => p.trim());
+      const parts = lines[i].split(bestDelim).map(p => p.trim());
       if (parts.length < 2) {
         errors.push({ row: i + 1, msg: '至少需要项目号和任务名称两列' });
         continue;
       }
-      const projectName = parts[0] || '';
-      const taskName = parts[1] || '';
-      const startDate = parts[2] || '';
-      const plannedEndDate = parts[3] || '';
-      const status = parts[4] || '未开始';
+      // Support both old (5 cols) and new (6 cols) format
+      let projectName, projectTitle, taskName, startDate, plannedEndDate, status;
+      if (parts.length === 5) {
+        // Old format: projectName, taskName, startDate, plannedEndDate, status
+        projectName = parts[0] || '';
+        projectTitle = '';
+        taskName = parts[1] || '';
+        startDate = parts[2] || '';
+        plannedEndDate = parts[3] || '';
+        status = parts[4] || '未开始';
+      } else {
+        // New format: projectName, projectTitle, taskName, startDate, plannedEndDate, status
+        projectName = parts[0] || '';
+        projectTitle = parts[1] || '';
+        taskName = parts[2] || '';
+        startDate = parts[3] || '';
+        plannedEndDate = parts[4] || '';
+        status = parts[5] || '未开始';
+      }
 
       if (!projectName) { errors.push({ row: i + 1, msg: '项目号为空' }); continue; }
       if (!taskName) { errors.push({ row: i + 1, msg: '任务名称为空' }); continue; }
-      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) { errors.push({ row: i + 1, msg: '开始时间格式错误（应为 YYYY-MM-DD）' }); continue; }
-      if (plannedEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(plannedEndDate)) { errors.push({ row: i + 1, msg: '计划完成时间格式错误（应为 YYYY-MM-DD）' }); continue; }
+      const nStartDate = normalizeDate(startDate);
+      const nPlannedEndDate = normalizeDate(plannedEndDate);
+      if (startDate && !nStartDate) { errors.push({ row: i + 1, msg: '开始时间格式无法识别: ' + startDate }); continue; }
+      if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: i + 1, msg: '计划完成时间格式无法识别: ' + plannedEndDate }); continue; }
 
       const validStatus = ['未开始', '进行中', '已完成', '已延期'];
       const finalStatus = validStatus.includes(status) ? status : '未开始';
 
-      importPreviewData.push({ projectName, taskName, startDate, plannedEndDate, status: finalStatus });
+      importPreviewData.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus });
     }
   } else {
     try {
@@ -1983,11 +2062,13 @@ function previewImportData() {
         if (!item.taskName) { errors.push({ row: idx + 1, msg: 'taskName 为空' }); return; }
         const startDate = item.startDate || '';
         const plannedEndDate = item.plannedEndDate || '';
-        if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) { errors.push({ row: idx + 1, msg: 'startDate 格式错误' }); return; }
-        if (plannedEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(plannedEndDate)) { errors.push({ row: idx + 1, msg: 'plannedEndDate 格式错误' }); return; }
+        const nStartDate = normalizeDate(startDate);
+        const nPlannedEndDate = normalizeDate(plannedEndDate);
+        if (startDate && !nStartDate) { errors.push({ row: idx + 1, msg: 'startDate 格式无法识别: ' + startDate }); return; }
+        if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: idx + 1, msg: 'plannedEndDate 格式无法识别: ' + plannedEndDate }); return; }
         const validStatus = ['未开始', '进行中', '已完成', '已延期'];
         const status = validStatus.includes(item.status) ? item.status : '未开始';
-        importPreviewData.push({ projectName: item.projectName, taskName: item.taskName, startDate, plannedEndDate, status });
+        importPreviewData.push({ projectName: item.projectName, projectTitle: item.projectTitle || '', taskName: item.taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status });
       });
     } catch {
       showToast('JSON 解析失败，请检查格式', 'error');
@@ -2002,12 +2083,12 @@ function previewImportData() {
   previewHtml += '</div>';
 
   if (importPreviewData.length > 0) {
-    previewHtml += '<div class="import-preview"><table><thead><tr><th>项目号</th><th>任务名称</th><th>开始时间</th><th>计划完成</th><th>状态</th></tr></thead><tbody>';
+    previewHtml += '<div class="import-preview"><table><thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成</th><th>状态</th></tr></thead><tbody>';
     importPreviewData.slice(0, 100).forEach(row => {
-      previewHtml += `<tr class="import-row-ok"><td>${row.projectName}</td><td>${row.taskName}</td><td>${row.startDate || '-'}</td><td>${row.plannedEndDate || '-'}</td><td>${row.status}</td></tr>`;
+      previewHtml += `<tr class="import-row-ok"><td>${row.projectName}</td><td>${row.projectTitle || '-'}</td><td>${row.taskName}</td><td>${row.startDate || '-'}</td><td>${row.plannedEndDate || '-'}</td><td>${row.status}</td></tr>`;
     });
     if (importPreviewData.length > 100) {
-      previewHtml += `<tr><td colspan="5" style="text-align:center; color:#999;">... 还有 ${importPreviewData.length - 100} 条数据</td></tr>`;
+      previewHtml += `<tr><td colspan="6" style="text-align:center; color:#999;">... 还有 ${importPreviewData.length - 100} 条数据</td></tr>`;
     }
     previewHtml += '</tbody></table></div>';
   }
@@ -2031,6 +2112,7 @@ function executeBatchImport() {
     data.tasks.push({
       id: genId(),
       projectName: item.projectName,
+      projectTitle: item.projectTitle || '',
       taskName: item.taskName,
       startDate: item.startDate,
       plannedEndDate: item.plannedEndDate,
