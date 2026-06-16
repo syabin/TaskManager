@@ -719,11 +719,10 @@ function nextWorkingDay(dateStr) {
 }
 
 // Convert accumulated hours to working day offset
-// Rule: first 2h → push to next working day; then every 8h → +1 working day
+// Rule: every 8h → 1 working day, rounded up (ceil)
 function hoursToWorkingDaysOffset(hours) {
   if (hours <= 0) return 0;
-  if (hours <= 2) return 1;
-  return 1 + Math.floor((hours - 2) / 8);
+  return Math.ceil(hours / 8);
 }
 
 // Add working days to a date (skipping weekends and holidays)
