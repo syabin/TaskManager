@@ -203,6 +203,17 @@ tr:hover { background: var(--bg-light); }
 .file-chip { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
 .file-chip-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-chip-size { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+
+/* Project number autocomplete */
+.project-suggest { position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px var(--shadow); z-index: 50; max-height: 200px; overflow-y: auto; display: none; }
+.project-suggest.active { display: block; }
+.project-suggest-item { padding: 8px 12px; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; gap: 12px; }
+.project-suggest-item:hover, .project-suggest-item.hl { background: var(--bg-primary-light); }
+.project-suggest-code { font-weight: 600; color: var(--text); }
+.project-suggest-title { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form-group { position: relative; }
+
+.paste-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: center; }
 .file-chip-remove { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1; }
 .file-chip-remove:hover { color: var(--danger-dark); }
 
@@ -908,6 +919,8 @@ function clearDropdown(containerId, allItems) {
 // Global click to close dropdowns
 document.addEventListener('click', function() {
   document.querySelectorAll('.dropdown-filter.open').forEach(function(d) { d.classList.remove('open'); });
+  var suggest = document.getElementById('projectSuggest');
+  if (suggest) suggest.classList.remove('active');
 });
 // Escape key to close modal
 document.addEventListener('keydown', function(e) {
@@ -932,7 +945,8 @@ function showTaskForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>项目号 *</label>
-        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001" oninput="autoFillProjectTitle()">
+        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001" autocomplete="off" oninput="autoFillProjectTitle()" onkeydown="projectSuggestKeydown(event)">
+        <div class="project-suggest" id="projectSuggest"></div>
       </div>
       <div class="form-group">
         <label>项目名称</label>
@@ -967,16 +981,86 @@ function showTaskForm(taskId) {
   openModal(html);
 }
 
-// Auto-fill project title when typing a known project code
+// Fuzzy match project numbers with dropdown suggestions
 function autoFillProjectTitle() {
   const input = document.getElementById('mTaskProject');
+  const suggest = document.getElementById('projectSuggest');
   const titleInput = document.getElementById('mTaskProjectTitle');
-  if (!input || !titleInput) return;
+  if (!input || !suggest) return;
   const code = input.value.trim();
-  if (!code) return;
+  if (!code) { suggest.classList.remove('active'); return; }
+  
   const data = loadData();
-  const match = data.tasks.find(t => t.projectName === code && t.projectTitle);
-  titleInput.value = match ? match.projectTitle : '';
+  // Collect unique projectName + projectTitle pairs
+  const seen = {};
+  const candidates = [];
+  data.tasks.forEach(function(t) {
+    if (!seen[t.projectName]) {
+      seen[t.projectName] = t.projectTitle || '';
+      candidates.push({ code: t.projectName, title: t.projectTitle || '' });
+    }
+  });
+  // Fuzzy match: typed text appears anywhere in projectName (case-insensitive)
+  const lower = code.toLowerCase();
+  const matches = candidates.filter(function(c) {
+    return c.code.toLowerCase().indexOf(lower) !== -1 && c.code.toLowerCase() !== lower;
+  });
+  
+  if (matches.length === 0) {
+    suggest.classList.remove('active');
+    // Still try exact match auto-fill
+    const exact = candidates.find(function(c) { return c.code.toLowerCase() === lower; });
+    if (exact && titleInput) titleInput.value = exact.title;
+    return;
+  }
+  // Auto-fill title if there's an exact match in the suggestions
+  const exactMatch = matches.find(function(c) { return c.code === code; });
+  if (exactMatch && titleInput) titleInput.value = exactMatch.title;
+  
+  var html = '';
+  matches.forEach(function(m, i) {
+    html += '<div class="project-suggest-item" data-code="' + m.code + '" data-title="' + m.title + '" onclick="selectProjectSuggestion(this,event)" onmouseenter="this.classList.add(\'hl\')" onmouseleave="this.classList.remove(\'hl\')">' +
+      '<span class="project-suggest-code">' + m.code + '</span>' +
+      '<span class="project-suggest-title">' + (m.title || '-') + '</span>' +
+      '</div>';
+  });
+  suggest.innerHTML = html;
+  suggest.classList.add('active');
+}
+
+function selectProjectSuggestion(el, ev) {
+  if (ev) ev.stopPropagation();
+  document.getElementById('mTaskProject').value = el.dataset.code;
+  document.getElementById('mTaskProjectTitle').value = el.dataset.title;
+  document.getElementById('projectSuggest').classList.remove('active');
+}
+
+function projectSuggestKeydown(e) {
+  var suggest = document.getElementById('projectSuggest');
+  if (!suggest.classList.contains('active')) return;
+  var items = suggest.querySelectorAll('.project-suggest-item');
+  var hl = suggest.querySelector('.project-suggest-item.hl');
+  var idx = -1;
+  if (hl) {
+    for (var i = 0; i < items.length; i++) { if (items[i] === hl) { idx = i; break; } }
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (hl) hl.classList.remove('hl');
+    idx = (idx + 1) % items.length;
+    items[idx].classList.add('hl');
+    items[idx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (hl) hl.classList.remove('hl');
+    idx = idx <= 0 ? items.length - 1 : idx - 1;
+    items[idx].classList.add('hl');
+    items[idx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    if (hl) { selectProjectSuggestion(hl); e.preventDefault(); }
+  } else if (e.key === 'Escape') {
+    suggest.classList.remove('active');
+  }
 }
 
 function saveTask(taskId) {
@@ -1221,6 +1305,7 @@ function showTempForm(tempId) {
         <label>附件 ${item && item.attachments && item.attachments.length > 0 ? '<span style="color:var(--text-muted); font-weight:400;">（修改时保留已有附件，关闭弹窗前可添加新附件）</span>' : ''}</label>
         <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
           <div class="drop-zone-text">拖拽文件到此处或<strong>点击选择</strong></div>
+          <div class="paste-hint">支持 Ctrl+V 粘贴</div>
           <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(event)">
         </div>
         <div class="file-list" id="pendingFileList"></div>
@@ -1303,6 +1388,28 @@ function closeTempForm() {
   _pendingFiles = [];
   closeModal();
 }
+
+// Global paste handler: when temp form modal is open, paste clipboard files as attachments
+document.addEventListener('paste', function(e) {
+  if (!document.getElementById('modalOverlay').classList.contains('active')) return;
+  var dropZone = document.getElementById('dropZone');
+  if (!dropZone || dropZone.offsetParent === null) return; // not visible
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  var files = [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item.kind === 'file') {
+      var file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  if (files.length > 0) {
+    e.preventDefault();
+    addPendingFiles(files);
+    showToast('已粘贴 ' + files.length + ' 个文件');
+  }
+});
 
 function formatFileSize(bytes) {
   if (!bytes || bytes === 0) return '0 B';
