@@ -115,6 +115,9 @@ tr:hover { background: var(--bg-light); }
 .date-cell { width: 100px; min-width: 100px; white-space: nowrap; text-align: center; }
 
 .impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
+.expand-link { display: inline-block; color: var(--primary); font-size: 12px; cursor: pointer; margin-left: 4px; user-select: none; }
+.expand-link:hover { text-decoration: underline; }
+.affected-hidden { }
 
 .checkbox-group { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .checkbox-group label { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; font-size: 13px; }
@@ -338,9 +341,14 @@ const STORAGE_KEY = 'task-temp-manager';
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { tasks: [], tempItems: [] };
-    return JSON.parse(raw);
-  } catch { return { tasks: [], tempItems: [] }; }
+    if (!raw) return { tasks: [], tempItems: [], holidays: [] };
+    var data = JSON.parse(raw);
+    // Normalize: ensure all expected keys exist (backward compat with old exports)
+    if (!data.tasks) data.tasks = [];
+    if (!data.tempItems) data.tempItems = [];
+    if (!data.holidays) data.holidays = [];
+    return data;
+  } catch { return { tasks: [], tempItems: [], holidays: [] }; }
 }
 
 function saveData(data) {
@@ -360,6 +368,7 @@ function genId() {
   }
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
 }
+
 function showToast(msg, type) {
   type = type || 'success';
   const container = document.getElementById('toastContainer');
@@ -368,6 +377,14 @@ function showToast(msg, type) {
   el.textContent = msg;
   container.appendChild(el);
   setTimeout(function() { el.remove(); }, 3000);
+}
+
+function copyTempItemId(id) {
+  navigator.clipboard.writeText(id).then(function() {
+    showToast('已复制 ID: ' + id);
+  }).catch(function() {
+    showToast('复制失败，ID: ' + id, 'error');
+  });
 }
 
 
@@ -1587,12 +1604,25 @@ function renderTempItems() {
     return;
   }
 
-  let html = '<table><thead><tr><th>日期</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>日期</th><th>事项ID</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   data.tempItems.forEach(item => {
-    const affectedNames = item.affectedTaskIds.map(tid => {
+    const affectedChips = item.affectedTaskIds.map(tid => {
       const task = data.tasks.find(t => t.id === tid);
       return task ? `<span class="impact-chip" title="[${task.projectName}] ${task.taskName}">[${task.projectName}] ${task.taskName}</span>` : '';
-    }).join(' ');
+    }).filter(function(s) { return s !== ''; });
+
+    var affectedCell = '-';
+    if (affectedChips.length > 0) {
+      if (affectedChips.length <= 3) {
+        affectedCell = affectedChips.join(' ');
+      } else {
+        var visibleChips = affectedChips.slice(0, 3).join(' ');
+        var hiddenChips = affectedChips.slice(3).join(' ');
+        affectedCell = visibleChips +
+          '<span class="expand-link" onclick="toggleAffectedTasks(this,\'' + item.id + '\')"> +' + (affectedChips.length - 3) + ' 个</span>' +
+          '<span class="affected-hidden" id="affected-extra-' + item.id + '" style="display:none;"> ' + hiddenChips + '</span>';
+      }
+    }
 
     const durationDisplay = item.durationUnit === 'd' ? `${item.durationValue}天` : `${item.durationValue}h`;
     const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
@@ -1604,12 +1634,15 @@ function renderTempItems() {
       ? `<span class="attachment-badge" onclick="showTempItemDetail('${item.id}')" style="cursor:pointer;" title="点击查看详情">📎 ${attachCount}</span>`
       : (hasArchivePath() ? '-' : '<span style="color:var(--text-muted); font-size:11px;">未配置</span>');
 
+    var dispId = item.id;
+    var dispIdShort = item.id.substring(0, 8) + '…';
     html += `<tr>
       <td>${item.date}</td>
+      <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="copyTempItemId('${dispId}')">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
       <td title="${item.description}">${item.description.length > 30 ? item.description.substring(0, 30) + '...' : item.description}</td>
       <td>${delayDisplay}</td>
-      <td style="max-width:300px;">${affectedNames || '-'}</td>
+      <td style="max-width:300px;">${affectedCell}</td>
       <td>${attachCell}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="showTempForm('${item.id}')">编辑</button>
@@ -1619,6 +1652,15 @@ function renderTempItems() {
   });
   html += '</tbody></table>';
   document.getElementById('tempList').innerHTML = html;
+}
+
+function toggleAffectedTasks(el, itemId) {
+  var extra = document.getElementById('affected-extra-' + itemId);
+  if (extra) {
+    var isHidden = extra.style.display === 'none';
+    extra.style.display = isHidden ? 'inline' : 'none';
+    el.textContent = isHidden ? ' 收起' : el.textContent.replace(' 收起', ' +' + (extra.querySelectorAll('.impact-chip').length) + ' 个');
+  }
 }
 
 function showTempItemDetail(tempId) {
@@ -1755,9 +1797,12 @@ function importData(event) {
   reader.onload = function(e) {
     try {
       const imported = JSON.parse(e.target.result);
-      if (!imported.tasks || !imported.tempItems) {
-        showToast('无效的数据格式', 'error'); return;
+      if (!imported.tasks || !Array.isArray(imported.tasks)) {
+        showToast('无效的数据格式：缺少 tasks 字段', 'error'); return;
       }
+      // Normalize imported data (backward compat: old exports may lack these keys)
+      if (!imported.tempItems || !Array.isArray(imported.tempItems)) imported.tempItems = [];
+      if (!imported.holidays || !Array.isArray(imported.holidays)) imported.holidays = [];
       const choice = confirm(
         `将导入 ${imported.tasks.length} 条任务和 ${imported.tempItems.length} 条临时事项。\n` +
         `点击「确定」覆盖当前数据，点击「取消」合并到当前数据。`
@@ -1796,7 +1841,7 @@ function importData(event) {
 function clearAllData() {
   if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
   if (!confirm('再次确认：真的要清空所有任务和临时事项吗？')) return;
-  saveData({ tasks: [], tempItems: [] });
+  saveData({ tasks: [], tempItems: [], holidays: [] });
   showToast("所有数据已清空");
   renderTasks();
 }
@@ -1997,6 +2042,19 @@ function executeBatchImport() {
 
 // ====== Init ======
 async function init() {
+  // 清理临时事项中的displayId字段（已废弃）
+  const data = loadData();
+  let cleaned = false;
+  data.tempItems.forEach(item => {
+    if (item.displayId !== undefined) {
+      delete item.displayId;
+      cleaned = true;
+    }
+  });
+  if (cleaned) {
+    saveData(data);
+  }
+
   updateDataStatus();
   renderTasks();
   // 异步加载官方节假日数据
