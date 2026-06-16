@@ -98,14 +98,14 @@ tr:hover { background: var(--bg-light); }
 .timeline-desc { font-size: 13px; margin-top: 4px; }
 
 .project-group { margin-bottom: 20px; }
-.project-group table { table-layout: fixed; }
-.project-group th:nth-child(1) { width: 200px; }
+.project-group table { width: 100%; }
+.project-group th:nth-child(1) { min-width: 180px; }
 .project-group th:nth-child(2),
 .project-group th:nth-child(3),
-.project-group th:nth-child(4) { width: 110px; }
-.project-group th:nth-child(5) { width: 70px; }
-.project-group th:nth-child(6) { width: 80px; }
-.project-group th:nth-child(7) { width: 130px; }
+.project-group th:nth-child(4) { min-width: 100px; }
+.project-group th:nth-child(5) { min-width: 80px; }
+.project-group th:nth-child(6) { min-width: 70px; }
+.project-group th:nth-child(7) { min-width: 50px; }
 .project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid var(--bg-primary-light); }
 
 .empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
