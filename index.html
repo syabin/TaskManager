@@ -282,7 +282,9 @@ tr:hover { background: var(--bg-light); }
       <span class="card-title">临时事项</span>
       <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
     </div>
-    <div id="tempList"></div>
+    <div id="tempListWrapper" style="max-height: 70vh; overflow-y: auto;">
+      <div id="tempList"></div>
+    </div>
   </div>
 </div>
 
@@ -1829,8 +1831,11 @@ function renderTempItems() {
     return;
   }
 
+  // Sort by date descending (倒序排列)
+  const sorted = [...data.tempItems].sort((a, b) => b.date.localeCompare(a.date));
+
   let html = '<table><thead><tr><th>日期</th><th>事项ID</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
-  data.tempItems.forEach(item => {
+  sorted.forEach(item => {
     const affectedChips = item.affectedTaskIds.map(tid => {
       const task = data.tasks.find(t => t.id === tid);
       return task ? `<span class="impact-chip" title="[${task.projectName}] ${task.taskName}">[${task.projectName}] ${task.taskName}</span>` : '';
