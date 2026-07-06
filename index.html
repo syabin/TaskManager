@@ -2305,7 +2305,7 @@ function executeBatchImport() {
 
 // ====== Init ======
 async function init() {
-  // 清理临时事项中的displayId字段（已废弃）
+  // 清理临时事项中的displayId字段（已废）
   const data = loadData();
   let cleaned = false;
   data.tempItems.forEach(item => {
