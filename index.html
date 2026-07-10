@@ -1289,8 +1289,14 @@ function showTaskDelays(taskId) {
 
   let timelineHtml = '<div class="timeline">';
   let accumulatedHours = 0;
-  // Sort by date for correct cumulative calculation
-  const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
+  // Sort by date, then by input time (createdAt) for same-day ordering
+  const sorted = [...task.delayRecords].sort((a, b) => {
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) return dateCmp;
+    const ca = a.createdAt || '';
+    const cb = b.createdAt || '';
+    return ca.localeCompare(cb);
+  });
   sorted.forEach(record => {
     if (record.type === 'adjust') {
       accumulatedHours = 0;
@@ -1584,7 +1590,8 @@ try {
               delayHours,
               newEndDate: '',
               causedByTempItemId: tempId,
-              reason: description
+              reason: description,
+              createdAt: oldItem.createdAt || new Date().toISOString()
             });
           }
           recalcTaskEndDate(task);
@@ -1609,6 +1616,7 @@ try {
     }
   } else {
     const newId = genId();
+    const nowIso = new Date().toISOString();
     var newItem = {
       id: newId,
       date,
@@ -1617,7 +1625,8 @@ try {
       description,
       impactType,
       affectedTaskIds,
-      attachments: []
+      attachments: [],
+      createdAt: nowIso
     };
     data.tempItems.push(newItem);
 
@@ -1638,7 +1647,8 @@ try {
           delayHours,
           newEndDate: '',
           causedByTempItemId: newId,
-          reason: description
+          reason: description,
+          createdAt: nowIso
         });
         recalcTaskEndDate(task);
       }
@@ -1668,8 +1678,14 @@ function recalcTaskEndDate(task) {
     return;
   }
 
-  // Sort records by date
-  const sorted = [...task.delayRecords].sort((a, b) => a.date.localeCompare(b.date));
+  // Sort records by date, then by input time (createdAt) for same-day ordering
+  const sorted = [...task.delayRecords].sort((a, b) => {
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) return dateCmp;
+    const ca = a.createdAt || '';
+    const cb = b.createdAt || '';
+    return ca.localeCompare(cb);
+  });
 
   // Split calculation by plan adjustments: each segment has its own baseline
   // and accumulatedHours resets at each plan adjustment boundary
@@ -1712,6 +1728,7 @@ function showAdjustForm(taskId, recordId) {
   if (!task) return;
   const record = recordId ? task.delayRecords.find(r => r.id === recordId) : null;
   const baseDate = record ? (record.adjustToDate || record.newEndDate || task.adjustedEndDate || task.plannedEndDate) : (task.adjustedEndDate || task.plannedEndDate);
+  const recordDate = record ? (record.date || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0];
   const reason = record ? (record.reason === '计划调整' ? '' : record.reason) : '';
   const title = record ? '编辑计划调整' : '计划调整';
   const btnText = record ? '确认修改' : '确认调整';
@@ -1730,6 +1747,13 @@ function showAdjustForm(taskId, recordId) {
       <div class="form-group">
         <label>调整为</label>
         <input type="date" id="mAdjustDate" value="${baseDate}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>调整日期</label>
+        <input type="date" id="mAdjustRecordDate" value="${recordDate}">
+        <span style="font-size:11px;color:var(--text-muted);">决定调整该计划的日期，可补录前几天的调整</span>
       </div>
     </div>
     <div class="form-row">
@@ -1753,6 +1777,7 @@ function saveAdjustment(taskId) {
   const task = data.tasks.find(t => t.id === taskId);
   if (!task) return;
   const newDate = document.getElementById('mAdjustDate').value;
+  const recordDate = document.getElementById('mAdjustRecordDate').value || newDate;
   const reason = document.getElementById('mAdjustReason').value.trim();
   if (!newDate) { showToast('请选择调整后的日期', 'error'); return; }
   const baseDate = task.adjustedEndDate || task.plannedEndDate;
@@ -1760,13 +1785,14 @@ function saveAdjustment(taskId) {
   task.adjustedEndDate = newDate;
   task.delayRecords.push({
     id: genId(),
-    date: new Date().toISOString().split('T')[0],
+    date: recordDate,
     delayHours: 0,
     adjustToDate: newDate,
     newEndDate: '',
     causedByTempItemId: null,
     reason: reason || '计划调整',
-    type: 'adjust'
+    type: 'adjust',
+    createdAt: new Date().toISOString()
   });
   recalcTaskEndDate(task);
   saveData(data);
@@ -1784,12 +1810,13 @@ function saveAdjustEdit(taskId, recordId) {
   const task = data.tasks.find(t => t.id === taskId);
   if (!task) return;
   const newDate = document.getElementById('mAdjustDate').value;
+  const recordDate = document.getElementById('mAdjustRecordDate').value || newDate;
   const reason = document.getElementById('mAdjustReason').value.trim();
   if (!newDate) { showToast('请选择调整后的日期', 'error'); return; }
   task.adjustedEndDate = newDate;
   const record = task.delayRecords.find(r => r.id === recordId);
   if (record) {
-    record.date = new Date().toISOString().split('T')[0];
+    record.date = recordDate;
     record.adjustToDate = newDate;
     record.newEndDate = newDate;
     record.reason = reason || '计划调整';
@@ -1845,8 +1872,14 @@ function renderTempItems() {
     return;
   }
 
-  // Sort by date descending (倒序排列)
-  const sorted = [...data.tempItems].sort((a, b) => b.date.localeCompare(a.date));
+  // Sort by date descending, then by input time (createdAt) descending
+  const sorted = [...data.tempItems].sort((a, b) => {
+    const dateCmp = b.date.localeCompare(a.date);
+    if (dateCmp !== 0) return dateCmp;
+    const ca = a.createdAt || '';
+    const cb = b.createdAt || '';
+    return cb.localeCompare(ca);
+  });
 
   let html = '<table><thead><tr><th>日期</th><th>事项ID</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   sorted.forEach(item => {
