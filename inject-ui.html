@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>注入测试数据</title></head>
+<body>
+<script>
+const STORAGE_KEY = 'task-temp-manager';
+const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+data.tasks = data.tasks || [];
+if (data.tasks.length === 0) {
+  data.tasks.push({ id: 'task_001', projectName: 'ZP001', taskName: '被阻塞任务', status: '进行中', plannedEndDate: '2026-08-01', currentEndDate: '2026-08-01', delayRecords: [] });
+  data.tasks.push({ id: 'task_002', projectName: 'ZP002', taskName: '被占用任务', status: '进行中', plannedEndDate: '2026-08-01', currentEndDate: '2026-08-01', delayRecords: [] });
+}
+data.tempItems = data.tempItems || [];
+if (data.tempItems.length === 0) {
+  data.tempItems.push({ id: 'tmp_ui_01', date: '2026-08-28', durationValue: 2, durationUnit: 'h', description: 'UI 测试临时事项', impactType: 'all', affectedTaskIds: ['task_001'], attachments: [], createdAt: new Date().toISOString() });
+}
+data.deliveryItems = data.deliveryItems || [];
+if (data.deliveryItems.length === 0) {
+  data.deliveryItems.push({ id: 'dlv_ui_01', date: '2026-08-28', deliveryDate: '2026-08-28', processStartDate: '2026-08-28', processValue: 1, processUnit: 'd', description: 'UI 测试交付件更新', blockImpactType: 'specific', blockAffectedTaskIds: ['task_001'], processImpactType: 'specific', processAffectedTaskIds: ['task_002'], attachments: [], createdAt: new Date().toISOString() });
+}
+localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+location.href = 'index.html';
+</script>
+</body>
+</html>

@@ -127,6 +127,9 @@ tr:hover { background: var(--bg-light); }
 .date-cell { white-space: nowrap; text-align: center; }
 
 .impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
+.type-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.tag-temp { background: #e8f0fe; color: #1a73e8; }
+.tag-delivery { background: #e6f4ea; color: #137333; }
 .expand-link { display: inline-block; color: var(--primary); font-size: 12px; cursor: pointer; margin-left: 4px; user-select: none; }
 .expand-link:hover { text-decoration: underline; }
 .affected-hidden { }
@@ -249,8 +252,8 @@ tr:hover { background: var(--bg-light); }
 <div class="tab-bar">
   <div class="tab-btns">
     <button class="tab-btn active" onclick="switchTab('tasks')">任务管理</button>
-    <button class="tab-btn" onclick="switchTab('temp')">临时事项</button>
-    <button class="tab-btn" onclick="switchTab('review')">审阅</button>
+    <button class="tab-btn" onclick="switchTab('delays')">延期记录</button>
+    <button class="tab-btn" onclick="switchTab('review')">汇总</button>
     <button class="tab-btn" onclick="switchTab('data')">数据管理</button>
   </div>
   <div id="taskStats" class="stats-grid stats-grid-compact"></div>
@@ -282,7 +285,7 @@ tr:hover { background: var(--bg-light); }
       <div class="form-group" style="justify-content:flex-end;">
         <label>&nbsp;</label>
         <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text);">
-          <input type="checkbox" id="hideCompletedProjects" checked onchange="renderTasks()"> 隐藏已完成项目
+          <input type="checkbox" id="hideCompletedProjects" checked onchange="onHideCompletedChange()"> 隐藏已完成项目
         </label>
       </div>
     </div>
@@ -290,40 +293,86 @@ tr:hover { background: var(--bg-light); }
   </div>
 </div>
 
-<!-- Tab 2: 临时事项 -->
-<div id="tab-temp" class="tab-content">
+<!-- Tab 2: 延期记录（临时事项 + 交付件更新 统一列表） -->
+<div id="tab-delays" class="tab-content">
   <div class="card">
-    <div class="card-header">
-      <span class="card-title">临时事项</span>
-      <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
+    <div class="filter-bar" style="padding:12px 20px; margin-bottom:0; flex-shrink:0; align-items:center;">
+      <div class="form-group" style="min-width:90px; flex:0; margin-bottom:0;">
+        <select id="delayTypeFilter" onchange="setDelayCurrentPage(1); renderDelayItems()" style="width:110px;" title="类型筛选">
+          <option value="all">全部类型</option>
+          <option value="temp">临时事项</option>
+          <option value="delivery">交付件更新</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:8px; margin-left:auto;">
+        <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
+        <button class="btn btn-primary" onclick="showDeliveryForm()">+ 新建交付件更新</button>
+      </div>
     </div>
-    <div id="tempList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+    <div style="padding:0 20px 12px; flex-shrink:0;">
+      <input type="text" id="delaySearchInput" placeholder="搜索描述 / 记录ID / 任务名..." oninput="setDelayCurrentPage(1); renderDelayItems()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:100%; box-sizing:border-box;">
+    </div>
+    <div id="delayList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+    <div class="pagination-bar" style="padding:10px 20px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; gap:12px;">
+      <div style="font-size:13px; color:var(--text-secondary);">
+        <span id="delayPageInfo">第 1 / 1 页，共 0 条</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div id="delayPagination" style="display:flex; gap:4px; align-items:center;"></div>
+        <select id="delayPageSize" onchange="onDelayPageSizeChange()" style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; outline:none;">
+          <option value="10">10 条/页</option>
+          <option value="20">20 条/页</option>
+        </select>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- Tab 3: 审阅 -->
+<!-- Tab 4: 汇总 -->
 <div id="tab-review" class="tab-content">
   <div class="card">
     <div class="card-header">
-      <span class="card-title">任务审阅</span>
+      <span class="card-title">任务汇总</span>
     </div>
     <div class="filter-bar">
+      <div class="form-group">
+        <label>汇总方向</label>
+        <select id="summaryDirection" onchange="renderReview()">
+          <option value="project">按项目号</option>
+          <option value="date">按日期</option>
+        </select>
+      </div>
+      <div class="form-group" id="reviewProjectGroup">
+        <label>项目筛选</label>
+        <div class="dropdown-filter" id="reviewFilterProject"></div>
+      </div>
+      <div class="form-group" id="reviewDateGroup" style="display:none;">
+        <label>日期范围（快捷）</label>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="setSummaryDateRange('lastweek')">上周</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setSummaryDateRange('thisweek')">本周</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setSummaryDateRange('lastmonth')">上月</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setSummaryDateRange('thismonth')">本月</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setSummaryDateRange('thisyear')">今年</button>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="date" id="summaryDateStart" onchange="renderReview()">
+          <span style="font-size:13px;color:var(--text-secondary);">至</span>
+          <input type="date" id="summaryDateEnd" onchange="renderReview()">
+        </div>
+      </div>
       <div class="form-group">
         <label>搜索任务</label>
         <input type="text" id="reviewSearchInput" placeholder="输入项目号或任务名称..." oninput="renderReview()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
       </div>
-      <div class="form-group">
-        <label>项目筛选</label>
-        <div class="dropdown-filter" id="reviewFilterProject"></div>
-      </div>
-      <div class="form-group">
-        <label>仅查看有延期的任务</label>
-        <select id="reviewFilterDelayed" onchange="renderReview()">
-          <option value="">全部</option>
-          <option value="yes">有延期</option>
-        </select>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text);">
+          <input type="checkbox" id="reviewOnlyDelayed" onchange="renderReview()"> 仅显示有延期任务
+        </label>
       </div>
     </div>
+    <div id="summaryStats" class="stats-grid"></div>
     <div id="reviewList" style="flex:1; overflow-y:auto; min-height:0;"></div>
   </div>
 </div>
@@ -372,14 +421,30 @@ const STORAGE_KEY = 'task-temp-manager';
 function loadData() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { tasks: [], tempItems: [], holidays: [] };
+    if (!raw) return { tasks: [], tempItems: [], deliveryItems: [], holidays: [] };
     var data = JSON.parse(raw);
     // Normalize: ensure all expected keys exist (backward compat with old exports)
     if (!data.tasks) data.tasks = [];
     if (!data.tempItems) data.tempItems = [];
+    if (!data.deliveryItems) data.deliveryItems = [];
     if (!data.holidays) data.holidays = [];
+    // Migrate legacy delivery items (single affected list) to dual-impact schema
+    data.deliveryItems.forEach(d => {
+      if (!d.blockImpactType && !d.processImpactType) {
+        d.blockImpactType = d.impactType || 'none';
+        d.blockAffectedTaskIds = d.affectedTaskIds || [];
+        d.processImpactType = 'none';
+        d.processAffectedTaskIds = [];
+        d.processStartDate = d.deliveryDate || d.date;
+      }
+      if (!d.blockImpactType) d.blockImpactType = 'none';
+      if (!d.blockAffectedTaskIds) d.blockAffectedTaskIds = [];
+      if (!d.processImpactType) d.processImpactType = 'none';
+      if (!d.processAffectedTaskIds) d.processAffectedTaskIds = [];
+      if (!d.processStartDate) d.processStartDate = d.deliveryDate || d.date;
+    });
     return data;
-  } catch { return { tasks: [], tempItems: [], holidays: [] }; }
+  } catch { return { tasks: [], tempItems: [], deliveryItems: [], holidays: [] }; }
 }
 
 function saveData(data) {
@@ -389,8 +454,8 @@ function saveData(data) {
 
 function updateDataStatus() {
   const data = loadData();
-  document.getElementById('dataStatus').textContent = `任务 ${data.tasks.length} 条 | 临时事项 ${data.tempItems.length} 条`;
-  document.getElementById('dataCount').textContent = `${data.tasks.length} 条任务，${data.tempItems.length} 条临时事项`;
+  document.getElementById('dataStatus').textContent = `任务 ${data.tasks.length} 条 | 临时事项 ${data.tempItems.length} 条 | 交付件更新 ${data.deliveryItems.length} 条`;
+  document.getElementById('dataCount').textContent = `${data.tasks.length} 条任务，${data.tempItems.length} 条临时事项，${data.deliveryItems.length} 条交付件更新`;
 }
 
 function genId() {
@@ -848,9 +913,9 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn')[['tasks','temp','review','data'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.tab-btn')[['tasks','delays','review','data'].indexOf(name)].classList.add('active');
   if (name === 'tasks') renderTasks();
-  if (name === 'temp') renderTempItems();
+  if (name === 'delays') renderDelayItems();
   if (name === 'review') renderReview();
   if (name === 'data') updateDataStatus();
 }
@@ -922,6 +987,28 @@ function getDropdownValues(containerId) {
   catch(e) { return []; }
 }
 
+// Persist task-list filter states to localStorage
+const FILTER_STATUS_KEY = 'tm-filter-status';
+const FILTER_PROJECT_KEY = 'tm-filter-project';
+const HIDE_COMPLETED_KEY = 'tm-hide-completed';
+
+function saveFilterState(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadFilterState(key, defaultValue) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? defaultValue : JSON.parse(v);
+  } catch(e) { return defaultValue; }
+}
+
+function onHideCompletedChange() {
+  const checked = document.getElementById('hideCompletedProjects').checked;
+  saveFilterState(HIDE_COMPLETED_KEY, checked);
+  renderTasks();
+}
+
 function toggleDropdown(containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -950,6 +1037,10 @@ function toggleDropdownItem(containerId, value) {
     el.classList.toggle('checked', selected.indexOf(el.textContent) >= 0);
   });
 
+  // Persist filter state
+  if (containerId === 'filterStatus') saveFilterState(FILTER_STATUS_KEY, selected);
+  if (containerId === 'filterProject') saveFilterState(FILTER_PROJECT_KEY, selected);
+
   // Trigger re-render based on page
   if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
   else if (containerId === 'reviewFilterProject') renderReview();
@@ -964,6 +1055,8 @@ function selectAllDropdown(containerId, allItems) {
   container.querySelectorAll('.dropdown-item').forEach(function(el) {
     el.classList.add('checked');
   });
+  if (containerId === 'filterStatus') saveFilterState(FILTER_STATUS_KEY, allItems.slice());
+  if (containerId === 'filterProject') saveFilterState(FILTER_PROJECT_KEY, allItems.slice());
   if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
   else if (containerId === 'reviewFilterProject') renderReview();
 }
@@ -977,6 +1070,8 @@ function clearDropdown(containerId, allItems) {
   container.querySelectorAll('.dropdown-item').forEach(function(el) {
     el.classList.remove('checked');
   });
+  if (containerId === 'filterStatus') saveFilterState(FILTER_STATUS_KEY, []);
+  if (containerId === 'filterProject') saveFilterState(FILTER_PROJECT_KEY, []);
   if (containerId === 'filterProject' || containerId === 'filterStatus') renderTasks();
   else if (containerId === 'reviewFilterProject') renderReview();
 }
@@ -1176,6 +1271,11 @@ function deleteTask(id) {
   data.tempItems.forEach(item => {
     item.affectedTaskIds = item.affectedTaskIds.filter(tid => tid !== id);
   });
+  data.deliveryItems.forEach(item => {
+    item.affectedTaskIds = (item.affectedTaskIds || []).filter(tid => tid !== id);
+    item.blockAffectedTaskIds = (item.blockAffectedTaskIds || []).filter(tid => tid !== id);
+    item.processAffectedTaskIds = (item.processAffectedTaskIds || []).filter(tid => tid !== id);
+  });
   saveData(data);
   showToast("任务已删除");
   renderTasks();
@@ -1203,15 +1303,25 @@ function getUniqueProjects() {
 function renderTasks() {
   const data = loadData();
 
-  // Initialize/update project dropdown filter
+  // Initialize/update project dropdown filter (restore saved state)
   var projects = getUniqueProjectsFromData(data);
-  initDropdown('filterProject', projects, getDropdownValues('filterProject'));
+  const savedProjects = loadFilterState(FILTER_PROJECT_KEY, []);
+  const projectValues = savedProjects.filter(p => projects.includes(p));
+  initDropdown('filterProject', projects, projectValues);
   const selectedProjects = getDropdownValues('filterProject');
 
-  // Initialize/update status dropdown filter
+  // Initialize/update status dropdown filter (restore saved state)
   const statuses = ['未开始', '进行中', '已完成', '已延期'];
-  initDropdown('filterStatus', statuses, getDropdownValues('filterStatus'));
+  const savedStatuses = loadFilterState(FILTER_STATUS_KEY, []);
+  const statusValues = savedStatuses.filter(s => statuses.includes(s));
+  initDropdown('filterStatus', statuses, statusValues);
   const selectedStatuses = getDropdownValues('filterStatus');
+
+  // Restore hide-completed checkbox
+  const hideCompletedCheckbox = document.getElementById('hideCompletedProjects');
+  if (hideCompletedCheckbox) {
+    hideCompletedCheckbox.checked = loadFilterState(HIDE_COMPLETED_KEY, true);
+  }
 
   // Stats
   const total = data.tasks.length;
@@ -1287,8 +1397,6 @@ function showTaskDelays(taskId) {
   const task = data.tasks.find(t => t.id === taskId);
   if (!task || task.delayRecords.length === 0) return;
 
-  let timelineHtml = '<div class="timeline">';
-  let accumulatedHours = 0;
   // Sort by date, then by input time (createdAt) for same-day ordering
   const sorted = [...task.delayRecords].sort((a, b) => {
     const dateCmp = a.date.localeCompare(b.date);
@@ -1297,28 +1405,60 @@ function showTaskDelays(taskId) {
     const cb = b.createdAt || '';
     return ca.localeCompare(cb);
   });
+
+  let timelineHtml = '<div class="timeline">';
+  let segmentBaseline = task.plannedEndDate;
+  let accumulatedHours = 0;
+
   sorted.forEach(record => {
+    let tag, desc, extra = '';
     if (record.type === 'adjust') {
       accumulatedHours = 0;
-    }
-    if (record.type !== 'adjust') {
+      segmentBaseline = record.adjustToDate || task.adjustedEndDate || task.plannedEndDate;
+      tag = '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>';
+      desc = `${record.date} · 调整基准 → ${segmentBaseline}`;
+    } else if (record.type === 'delivery') {
+      const processHours = record.processHours || 0;
+      const processDays = hoursToWorkingDaysOffset(processHours);
+      const baselineDate = record.effectType === 'process' ? (record.processStartDate || record.deliveryDate) : record.deliveryDate;
+      const deliveryEnd = addWorkingDays(baselineDate, processDays);
+      const tempEnd = addWorkingDays(segmentBaseline, hoursToWorkingDaysOffset(accumulatedHours));
+      if (deliveryEnd > tempEnd) {
+        segmentBaseline = deliveryEnd;
+        accumulatedHours = 0;
+      }
+      const effectLabel = record.effectType === 'process' ? '处理占用' : '交付件阻塞';
+      tag = '<span style="background:#e8f5e9;color:#2e7d32;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">交付件更新</span>' +
+            '<span style="background:#d4edda;color:#155724;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">' + effectLabel + '</span>';
+      desc = `${baselineDate} · 处理 ${processHours}h → 延后 ${processDays} 个工作日`;
+      const deliveryItem = record.causedByDeliveryItemId ? data.deliveryItems.find(di => di.id === record.causedByDeliveryItemId) : null;
+      if (deliveryItem) {
+        extra = `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
+          <span class="delay-link" onclick="showDeliveryItemDetail('${deliveryItem.id}')">查看关联交付件更新：${deliveryItem.description}</span>
+          <button class="btn btn-outline btn-sm" onclick="editDeliveryItemFromDelay('${deliveryItem.id}', '${taskId}')">编辑此更新</button>
+        </div>`;
+      }
+    } else {
       accumulatedHours += (record.delayHours || 0);
+      const workDays = hoursToWorkingDaysOffset(accumulatedHours);
+      tag = '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
+      desc = `${record.date} · 累计 ${accumulatedHours}h → 延期 ${workDays} 个工作日`;
+      const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
+      if (tempItem) {
+        extra = `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
+          <span class="delay-link" onclick="showTempItemDetail('${tempItem.id}')">查看关联临时事项：${tempItem.description}</span>
+          <button class="btn btn-outline btn-sm" onclick="editTempItemFromDelay('${tempItem.id}', '${taskId}')">编辑此事项</button>
+        </div>`;
+      }
     }
-    const workDays = hoursToWorkingDaysOffset(accumulatedHours);
-    const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
-    const isAdjust = record.type === 'adjust';
-    const tag = isAdjust ? '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>' : '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
-    const adjustBtn = isAdjust ? `<span style="margin-left:8px;">
+    const adjustBtn = record.type === 'adjust' ? `<span style="margin-left:8px;">
         <button class="btn btn-outline btn-sm" onclick="editAdjustRecord('${taskId}','${record.id}')">编辑</button>
       </span>` : '';
     timelineHtml += `<div class="timeline-item">
-      <div class="timeline-date">${tag}${record.date} · 累计 ${accumulatedHours}h → ${isAdjust ? '调整基准' : '延期 ' + workDays + ' 个工作日'}${adjustBtn}</div>
+      <div class="timeline-date">${tag}${desc}${adjustBtn}</div>
       <div class="timeline-desc">完成时间变更为：${record.newEndDate}</div>
       ${record.reason ? `<div class="timeline-desc" style="color:#666;">原因：${record.reason}</div>` : ''}
-      ${tempItem ? `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
-        <span class="delay-link" onclick="showTempItemDetail('${tempItem.id}')">查看关联临时事项：${tempItem.description}</span>
-        <button class="btn btn-outline btn-sm" onclick="editTempItemFromDelay('${tempItem.id}', '${taskId}')">编辑此事项</button>
-      </div>` : ''}
+      ${extra}
     </div>`;
   });
   timelineHtml += '</div>';
@@ -1399,8 +1539,8 @@ function showTempForm(tempId) {
       <div class="form-group">
         <label>时长</label>
         <div style="display:flex; gap:4px;">
-          <input type="number" id="mTempDuration" value="${item ? item.durationValue : ''}" min="0" step="0.5" placeholder="如：2" style="flex:1;">
-          <select id="mTempDurationUnit" style="width:70px;">
+          <input type="number" id="mTempDuration" value="${item ? item.durationValue : ''}" min="0" step="0.5" placeholder="如：2" style="flex:1; min-width:80px;">
+          <select id="mTempDurationUnit" style="width:90px; min-width:90px;">
             <option value="h" ${item && item.durationUnit === 'h' ? 'selected' : ''}>小时</option>
             <option value="d" ${item && item.durationUnit === 'd' ? 'selected' : ''}>天</option>
           </select>
@@ -1687,8 +1827,8 @@ function recalcTaskEndDate(task) {
     return ca.localeCompare(cb);
   });
 
-  // Split calculation by plan adjustments: each segment has its own baseline
-  // and accumulatedHours resets at each plan adjustment boundary
+  // Split calculation by plan adjustments and delivery updates:
+  // each segment has its own baseline; accumulatedHours resets at each boundary.
   let segmentBaseline = task.plannedEndDate;
   let accumulatedHours = 0;
 
@@ -1697,10 +1837,25 @@ function recalcTaskEndDate(task) {
       // Plan adjustment: reset accumulated hours, switch to new baseline
       accumulatedHours = 0;
       segmentBaseline = r.adjustToDate || task.adjustedEndDate || task.plannedEndDate;
+      r.newEndDate = segmentBaseline;
+      return;
     }
-    if (r.type !== 'adjust') {
-      accumulatedHours += (r.delayHours || 0);
+    if (r.type === 'delivery') {
+      // Delivery update: the task cannot finish before deliveryDate + processing time.
+      // effectType 'block' uses deliveryDate; 'process' uses the start date of handling.
+      const processHours = r.processHours || 0;
+      const processDays = hoursToWorkingDaysOffset(processHours);
+      const baselineDate = r.effectType === 'process' ? (r.processStartDate || r.deliveryDate) : r.deliveryDate;
+      const deliveryEnd = addWorkingDays(baselineDate, processDays);
+      const tempEnd = addWorkingDays(segmentBaseline, hoursToWorkingDaysOffset(accumulatedHours));
+      if (deliveryEnd > tempEnd) {
+        segmentBaseline = deliveryEnd;
+        accumulatedHours = 0;
+      }
+      r.newEndDate = addWorkingDays(segmentBaseline, hoursToWorkingDaysOffset(accumulatedHours));
+      return;
     }
+    accumulatedHours += (r.delayHours || 0);
     const workDays = hoursToWorkingDaysOffset(accumulatedHours);
     const newEnd = addWorkingDays(segmentBaseline, workDays);
     r.newEndDate = newEnd;
@@ -1865,70 +2020,761 @@ function deleteTempItem(id) {
   renderTempItems();
 }
 
-function renderTempItems() {
+// ====== Delivery Update Management ======
+const DELIVERY_PAGE_SIZE_KEY = 'tm-delivery-page-size';
+const DELIVERY_PAGE_KEY = 'tm-delivery-page';
+let _deliveryCurrentPage = 1;
+
+function getDeliveryPageSize() {
+  const v = localStorage.getItem(DELIVERY_PAGE_SIZE_KEY);
+  if (v === '10' || v === '20') return parseInt(v, 10);
+  return 20;
+}
+
+function setDeliveryPageSize(size) {
+  localStorage.setItem(DELIVERY_PAGE_SIZE_KEY, String(size));
+}
+
+function getDeliveryCurrentPage() {
+  return _deliveryCurrentPage || 1;
+}
+
+function setDeliveryCurrentPage(page) {
+  _deliveryCurrentPage = page;
+}
+
+function onDeliveryPageSizeChange() {
+  const size = parseInt(document.getElementById('deliveryPageSize').value, 10);
+  setDeliveryPageSize(size);
+  setDeliveryCurrentPage(1);
+  renderDeliveryItems();
+}
+
+function renderDeliveryPagination(total, pageSize, currentPage, onPageChange) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  let html = `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>`;
+  html += `<span style="font-size:13px; color:var(--text-secondary); padding:0 8px;">第 ${currentPage} / ${totalPages} 页，共 ${total} 条</span>`;
+  html += `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>`;
+  return html;
+}
+
+function changeDeliveryPage(page) {
   const data = loadData();
-  if (data.tempItems.length === 0) {
-    document.getElementById('tempList').innerHTML = '<div class="empty-state"><p>暂无临时事项</p></div>';
+  const pageSize = getDeliveryPageSize();
+  const totalPages = Math.max(1, Math.ceil(data.deliveryItems.length / pageSize));
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  setDeliveryCurrentPage(page);
+  renderDeliveryItems();
+}
+
+function copyDeliveryItemId(id) {
+  navigator.clipboard.writeText(id).then(function() {
+    showToast('已复制 ID: ' + id);
+  }).catch(function() {
+    showToast('复制失败，ID: ' + id, 'error');
+  });
+}
+
+var _pendingDeliveryDelayModalTaskId = null;
+
+function editDeliveryItemFromDelay(deliveryItemId, taskId) {
+  _pendingDeliveryDelayModalTaskId = taskId;
+  closeModal();
+  showDeliveryForm(deliveryItemId);
+}
+
+function showDeliveryForm(deliveryId) {
+  const data = loadData();
+  const item = deliveryId ? data.deliveryItems.find(t => t.id === deliveryId) : null;
+  const title = item ? '编辑交付件更新' : '新建交付件更新';
+  const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
+
+  const blockCheckboxes = incompleteTasks.map(t =>
+    `<label><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" ${item && item.blockAffectedTaskIds && item.blockAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  ).join('');
+  const processCheckboxes = incompleteTasks.map(t =>
+    `<label><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" ${item && item.processAffectedTaskIds && item.processAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  ).join('');
+
+  _pendingFiles = [];
+  var existingAttachmentsHtml = '';
+  if (item && item.attachments && item.attachments.length > 0) {
+    existingAttachmentsHtml = item.attachments.map(function(a, idx) {
+      return `<div class="file-chip">
+        <span class="file-chip-name" title="${a.name}">📎 ${a.name}</span>
+        <span class="file-chip-size">${formatFileSize(a.size)}</span>
+        <button class="file-chip-remove" onclick="removeExistingDeliveryAttachment('${deliveryId}','${a.name.replace(/'/g, "\\'")}')" title="删除附件">×</button>
+      </div>`;
+    }).join('');
+  }
+
+  var uploadSection = '';
+  if (hasArchivePath()) {
+    uploadSection = `
+    <div class="form-row">
+      <div class="form-group" style="min-width:100%;">
+        <label>附件 ${item && item.attachments && item.attachments.length > 0 ? '<span style="color:var(--text-muted); font-weight:400;">（修改时保留已有附件，关闭弹窗前可添加新附件）</span>' : ''}</label>
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+          <div class="drop-zone-text">拖拽文件到此处或<strong>点击选择</strong></div>
+          <div class="paste-hint">支持 Ctrl+V 粘贴</div>
+          <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(event)">
+        </div>
+        <div class="file-list" id="pendingFileList"></div>
+        ${existingAttachmentsHtml ? '<div style="margin-top:8px; font-size:12px; color:var(--text-secondary);">已有附件：</div>' + '<div class="file-list">' + existingAttachmentsHtml + '</div>' : ''}
+      </div>
+    </div>`;
+  }
+
+  const html = `
+    <div class="modal-header">
+      <h3>${title}</h3>
+      <button class="modal-close" onclick="closeDeliveryForm()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>交付件更新日期</label>
+        <input type="date" id="mDeliveryDate" value="${item ? item.date : new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label>开始处理日期</label>
+        <input type="date" id="mDeliveryProcessStartDate" value="${item ? (item.processStartDate || item.deliveryDate || item.date) : new Date().toISOString().split('T')[0]}">
+      </div>
+      <div class="form-group">
+        <label>处理时长</label>
+        <div style="display:flex; gap:4px;">
+          <input type="number" id="mDeliveryProcess" value="${item ? item.processValue : ''}" min="0" step="0.5" placeholder="如：2" style="flex:1; min-width:80px;">
+          <select id="mDeliveryProcessUnit" style="width:90px; min-width:90px;">
+            <option value="h" ${item && item.processUnit === 'h' ? 'selected' : ''}>小时</option>
+            <option value="d" ${item && item.processUnit === 'd' ? 'selected' : ''}>天</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>交付件说明</label>
+        <textarea id="mDeliveryDesc" rows="2" placeholder="交付件更新内容">${item ? item.description : ''}</textarea>
+      </div>
+    </div>
+    <div style="margin:12px 0 8px; font-size:13px; font-weight:600; color:var(--text-primary);">影响一：交付件本身阻塞</div>
+    <div class="form-row">
+      <div class="form-group">
+        <select id="mDeliveryBlockImpactType" onchange="toggleDeliveryBlockTaskSelect()">
+          <option value="none" ${item && item.blockImpactType === 'none' ? 'selected' : ''}>无</option>
+          <option value="all" ${item && item.blockImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="specific" ${item && item.blockImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row" id="mDeliveryBlockTaskSelectRow" style="display:${item && item.blockImpactType === 'specific' ? 'flex' : 'none'};">
+      <div class="form-group" style="min-width:100%;">
+        <label>被交付件阻塞的任务</label>
+        ${incompleteTasks.length > 0 ?
+          `<div class="checkbox-group">${blockCheckboxes}</div>` :
+          '<p style="color:#999; font-size:13px; padding:8px;">暂无未完成任务</p>'}
+      </div>
+    </div>
+    <div style="margin:16px 0 8px; font-size:13px; font-weight:600; color:var(--text-primary);">影响二：处理交付件占用工时</div>
+    <div class="form-row">
+      <div class="form-group">
+        <select id="mDeliveryProcessImpactType" onchange="toggleDeliveryProcessTaskSelect()">
+          <option value="none" ${item && item.processImpactType === 'none' ? 'selected' : ''}>无</option>
+          <option value="all" ${item && item.processImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="specific" ${item && item.processImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row" id="mDeliveryProcessTaskSelectRow" style="display:${item && item.processImpactType === 'specific' ? 'flex' : 'none'};">
+      <div class="form-group" style="min-width:100%;">
+        <label>因处理而被占用的任务</label>
+        ${incompleteTasks.length > 0 ?
+          `<div class="checkbox-group">${processCheckboxes}</div>` :
+          '<p style="color:#999; font-size:13px; padding:8px;">暂无未完成任务</p>'}
+      </div>
+    </div>
+    ${uploadSection}
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeDeliveryForm()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" id="btnSaveDelivery" onclick="saveDeliveryItem('${deliveryId || ''}')">保存并应用延期</button>
+    </div>
+  `;
+  openModal(html);
+
+  if (hasArchivePath()) {
+    setTimeout(function() {
+      var dropZone = document.getElementById('dropZone');
+      if (dropZone) {
+        dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('drag-over'); });
+        dropZone.addEventListener('drop', function(e) {
+          e.preventDefault();
+          dropZone.classList.remove('drag-over');
+          addPendingFiles(e.dataTransfer.files);
+        });
+      }
+    }, 50);
+  }
+}
+
+function closeDeliveryForm() {
+  _pendingDeliveryDelayModalTaskId = null;
+  _pendingFiles = [];
+  closeModal();
+}
+
+function toggleDeliveryBlockTaskSelect() {
+  const type = document.getElementById('mDeliveryBlockImpactType').value;
+  document.getElementById('mDeliveryBlockTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
+}
+function toggleDeliveryProcessTaskSelect() {
+  const type = document.getElementById('mDeliveryProcessImpactType').value;
+  document.getElementById('mDeliveryProcessTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
+}
+function toggleDeliveryTaskSelect() {
+  toggleDeliveryBlockTaskSelect();
+  toggleDeliveryProcessTaskSelect();
+}
+
+function collectDeliveryAffectedTasks(impactType, checkboxClass, data) {
+  if (impactType === 'none') return [];
+  if (impactType === 'specific') {
+    const ids = [...document.querySelectorAll(checkboxClass + ':checked')].map(cb => cb.value);
+    if (ids.length === 0) return null; // signal validation error
+    return ids;
+  }
+  return data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
+}
+
+async function saveDeliveryItem(deliveryId) {
+try {
+  const deliveryDate = document.getElementById('mDeliveryDate').value;
+  const processStartDate = document.getElementById('mDeliveryProcessStartDate').value;
+  const processValue = parseFloat(document.getElementById('mDeliveryProcess').value) || 0;
+  const processUnit = document.getElementById('mDeliveryProcessUnit').value;
+  const description = document.getElementById('mDeliveryDesc').value.trim();
+  const blockImpactType = document.getElementById('mDeliveryBlockImpactType').value;
+  const processImpactType = document.getElementById('mDeliveryProcessImpactType').value;
+
+  const processHours = processUnit === 'd' ? processValue * 8 : processValue;
+
+  if (!description) { showToast('请填写交付件说明', 'error'); return; }
+
+  const data = loadData();
+  const blockAffectedTaskIds = collectDeliveryAffectedTasks(blockImpactType, '.delivery-block-task-cb', data);
+  const processAffectedTaskIds = collectDeliveryAffectedTasks(processImpactType, '.delivery-process-task-cb', data);
+  if (blockAffectedTaskIds === null) { showToast('请选择被交付件阻塞的任务', 'error'); return; }
+  if (processAffectedTaskIds === null) { showToast('请选择因处理而被占用的任务', 'error'); return; }
+
+  const allAffectedTaskIds = Array.from(new Set([...blockAffectedTaskIds, ...processAffectedTaskIds]));
+
+  function applyDeliveryRecordsToTask(task, itemId, createdAt) {
+    // Remove old records from this delivery item for this task
+    task.delayRecords = task.delayRecords.filter(r => r.causedByDeliveryItemId !== itemId);
+    // Add block effect record
+    if (blockAffectedTaskIds.includes(task.id)) {
+      task.delayRecords.push({
+        id: genId(),
+        date: deliveryDate,
+        deliveryDate,
+        processHours,
+        newEndDate: '',
+        causedByDeliveryItemId: itemId,
+        reason: description,
+        type: 'delivery',
+        effectType: 'block',
+        createdAt: createdAt
+      });
+    }
+    // Add process effect record
+    if (processAffectedTaskIds.includes(task.id)) {
+      task.delayRecords.push({
+        id: genId(),
+        date: processStartDate,
+        deliveryDate: processStartDate,
+        processStartDate,
+        processHours,
+        newEndDate: '',
+        causedByDeliveryItemId: itemId,
+        reason: description,
+        type: 'delivery',
+        effectType: 'process',
+        createdAt: createdAt
+      });
+    }
+    recalcTaskEndDate(task);
+  }
+
+  if (deliveryId) {
+    const oldItem = data.deliveryItems.find(t => t.id === deliveryId);
+    if (oldItem) {
+      // Recalculate all tasks that were previously or are now affected
+      const previouslyAffected = Array.from(new Set([
+        ...(oldItem.blockAffectedTaskIds || []),
+        ...(oldItem.processAffectedTaskIds || []),
+        ...(oldItem.affectedTaskIds || [])
+      ]));
+      const tasksToRecalc = Array.from(new Set([...previouslyAffected, ...allAffectedTaskIds]));
+
+      tasksToRecalc.forEach(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        if (task) applyDeliveryRecordsToTask(task, deliveryId, oldItem.createdAt || new Date().toISOString());
+      });
+
+      oldItem.date = deliveryDate;
+      oldItem.deliveryDate = deliveryDate;
+      oldItem.processStartDate = processStartDate;
+      oldItem.processValue = processValue;
+      oldItem.processUnit = processUnit;
+      oldItem.description = description;
+      oldItem.blockImpactType = blockImpactType;
+      oldItem.blockAffectedTaskIds = blockAffectedTaskIds;
+      oldItem.processImpactType = processImpactType;
+      oldItem.processAffectedTaskIds = processAffectedTaskIds;
+      // Keep legacy fields in sync for safety
+      oldItem.impactType = blockImpactType;
+      oldItem.affectedTaskIds = blockAffectedTaskIds;
+
+      if (_pendingFiles.length > 0) {
+        var newSaved = await saveAttachmentsToDisk(oldItem, _pendingFiles);
+        if (newSaved.length > 0) {
+          oldItem.attachments = (oldItem.attachments || []).concat(newSaved);
+        }
+      }
+    }
+  } else {
+    const newId = genId();
+    const nowIso = new Date().toISOString();
+    var newItem = {
+      id: newId,
+      date: deliveryDate,
+      deliveryDate,
+      processStartDate,
+      processValue,
+      processUnit,
+      description,
+      blockImpactType,
+      blockAffectedTaskIds,
+      processImpactType,
+      processAffectedTaskIds,
+      impactType: blockImpactType,
+      affectedTaskIds: blockAffectedTaskIds,
+      attachments: [],
+      createdAt: nowIso
+    };
+    data.deliveryItems.push(newItem);
+
+    if (_pendingFiles.length > 0) {
+      var saved = await saveAttachmentsToDisk(newItem, _pendingFiles);
+      if (saved.length > 0) {
+        newItem.attachments = saved;
+      }
+    }
+
+    allAffectedTaskIds.forEach(tid => {
+      const task = data.tasks.find(t => t.id === tid);
+      if (task) applyDeliveryRecordsToTask(task, newId, nowIso);
+    });
+  }
+
+  saveData(data);
+  _pendingFiles = [];
+  closeModal();
+  showToast("交付件更新已保存");
+  renderDeliveryItems();
+  renderTasks();
+
+  if (_pendingDeliveryDelayModalTaskId) {
+    var reopenTaskId = _pendingDeliveryDelayModalTaskId;
+    _pendingDeliveryDelayModalTaskId = null;
+    setTimeout(function() { showTaskDelays(reopenTaskId); }, 100);
+  }
+} catch(e) { console.error('saveDeliveryItem error:', e); }
+}
+
+function deleteDeliveryItem(id) {
+  if (!confirm('确定删除此交付件更新？已关联的任务延期记录和附件将被清除。')) return;
+  const data = loadData();
+  const item = data.deliveryItems.find(t => t.id === id);
+  if (item) {
+    const affected = Array.from(new Set([
+      ...(item.blockAffectedTaskIds || []),
+      ...(item.processAffectedTaskIds || []),
+      ...(item.affectedTaskIds || [])
+    ]));
+    affected.forEach(tid => {
+      const task = data.tasks.find(t => t.id === tid);
+      if (task) {
+        task.delayRecords = task.delayRecords.filter(r => r.causedByDeliveryItemId !== id);
+        recalcTaskEndDate(task);
+      }
+    });
+    deleteAttachmentsFolder(item);
+  }
+  data.deliveryItems = data.deliveryItems.filter(t => t.id !== id);
+  saveData(data);
+  showToast("交付件更新已删除");
+  renderDeliveryItems();
+}
+
+function removeExistingDeliveryAttachment(deliveryId, filename) {
+  if (!confirm('确定删除附件 "' + filename + '"？')) return;
+  var data = loadData();
+  var item = data.deliveryItems.find(function(t) { return t.id === deliveryId; });
+  if (!item) return;
+  deleteAttachmentFile(item, filename).then(function() {
+    saveData(data);
+    showToast('已删除附件: ' + filename);
+    showDeliveryForm(deliveryId);
+  });
+}
+
+function taskNamesForDeliveryItem(taskIds, data) {
+  if (!taskIds || taskIds.length === 0) return '<li>无</li>';
+  return taskIds.map(tid => {
+    const task = data.tasks.find(t => t.id === tid);
+    return task ? `<li>[${task.projectName}] ${task.taskName} — 当前完成时间: ${task.currentEndDate}</li>` : '';
+  }).join('');
+}
+
+function showDeliveryItemDetail(deliveryId) {
+  const data = loadData();
+  const item = data.deliveryItems.find(t => t.id === deliveryId);
+  if (!item) return;
+
+  const processDisplay = item.processUnit === 'd' ? `${item.processValue} 天` : `${item.processValue} 小时`;
+  const processHours = item.processUnit === 'd' ? item.processValue * 8 : item.processValue;
+  const processWorkdays = hoursToWorkingDaysOffset(processHours);
+  const blockDelayDisplay = `从 ${item.date} 延 ${processWorkdays} 工作日`;
+  const processDelayDisplay = `从 ${item.processStartDate || item.date} 延 ${processWorkdays} 工作日`;
+
+  const blockScopeText = item.blockImpactType === 'all' ? '所有未完成任务' : (item.blockImpactType === 'specific' ? '指定任务' : '无');
+  const processScopeText = item.processImpactType === 'all' ? '所有未完成任务' : (item.processImpactType === 'specific' ? '指定任务' : '无');
+
+  var attachmentSection = '';
+  var hasArchive = hasArchivePath();
+  var attachCount = item.attachments ? item.attachments.length : 0;
+
+  if (hasArchive && attachCount > 0) {
+    var attachItems = item.attachments.map(function(a) {
+      return '<div class="attachment-item">' +
+        '<span class="attachment-item-name" title="' + a.name + '">📎 ' + a.name + '</span>' +
+        '<span class="attachment-item-size">' + formatFileSize(a.size) + '</span>' +
+        '<button class="btn btn-outline btn-sm" onclick="openDeliveryAttachmentById(\'' + deliveryId + '\',\'' + a.name.replace(/'/g, "\\'") + '\')">打开</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="deleteDeliveryAttachmentById(\'' + deliveryId + '\',\'' + a.name.replace(/'/g, "\\'") + '\')">删除</button>' +
+        '</div>';
+    }).join('');
+    attachmentSection = `
+    <div class="form-group" style="margin-top:12px;">
+      <label>附件 (${attachCount} 个)</label>
+      <div class="attachment-list">${attachItems}</div>
+    </div>`;
+  } else if (hasArchive) {
+    attachmentSection = `
+    <div class="form-group" style="margin-top:12px;">
+      <label>附件</label>
+      <p style="color:var(--text-muted); font-size:13px;">无附件</p>
+    </div>`;
+  }
+
+  openModal(`
+    <div class="modal-header">
+      <h3>交付件更新详情</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>交付件更新日期</label><p>${item.date}</p></div>
+      <div class="form-group"><label>开始处理日期</label><p>${item.processStartDate || item.date}</p></div>
+      <div class="form-group"><label>处理时长</label><p>${processDisplay}</p></div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px;"><label>交付件说明</label><p>${item.description}</p></div>
+    <div style="margin:12px 0 8px; font-size:13px; font-weight:600; color:var(--text-primary);">影响一：交付件阻塞 (${blockScopeText})</div>
+    <ul style="margin-top:6px; padding-left:20px; font-size:13px;">${taskNamesForDeliveryItem(item.blockAffectedTaskIds, data)}</ul>
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">导致延期：${blockDelayDisplay}</div>
+    <div style="margin:16px 0 8px; font-size:13px; font-weight:600; color:var(--text-primary);">影响二：处理占用 (${processScopeText})</div>
+    <ul style="margin-top:6px; padding-left:20px; font-size:13px;">${taskNamesForDeliveryItem(item.processAffectedTaskIds, data)}</ul>
+    <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;">导致延期：${processDelayDisplay}</div>
+    ${attachmentSection}
+  `);
+}
+
+function openDeliveryAttachmentById(deliveryId, filename) {
+  var data = loadData();
+  var item = data.deliveryItems.find(function(t) { return t.id === deliveryId; });
+  if (item) { openAttachment(item, filename); }
+}
+
+function deleteDeliveryAttachmentById(deliveryId, filename) {
+  var data = loadData();
+  var item = data.deliveryItems.find(function(t) { return t.id === deliveryId; });
+  if (!item) return;
+  if (!confirm('确定删除附件 "' + filename + '"？')) return;
+  deleteAttachmentFile(item, filename).then(function() {
+    saveData(data);
+    showToast('已删除附件: ' + filename);
+    showDeliveryItemDetail(deliveryId);
+  });
+}
+
+// Temp item list pagination
+const TEMP_PAGE_SIZE_KEY = 'tm-temp-page-size';
+const TEMP_PAGE_KEY = 'tm-temp-page';
+let _tempCurrentPage = 1;
+
+function getTempPageSize() {
+  const v = localStorage.getItem(TEMP_PAGE_SIZE_KEY);
+  if (v === '10' || v === '20') return parseInt(v, 10);
+  return 20;
+}
+
+function setTempPageSize(size) {
+  localStorage.setItem(TEMP_PAGE_SIZE_KEY, String(size));
+}
+
+function getTempCurrentPage() {
+  return _tempCurrentPage || 1;
+}
+
+function setTempCurrentPage(page) {
+  _tempCurrentPage = page;
+}
+
+function onTempPageSizeChange() {
+  const size = parseInt(document.getElementById('tempPageSize').value, 10);
+  setTempPageSize(size);
+  setTempCurrentPage(1);
+  renderTempItems();
+}
+
+function renderTempPagination(total, pageSize, currentPage, onPageChange) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  let html = `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>`;
+  html += `<span style="font-size:13px; color:var(--text-secondary); padding:0 8px;">第 ${currentPage} / ${totalPages} 页，共 ${total} 条</span>`;
+  html += `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>`;
+  return html;
+}
+
+function changeTempPage(page) {
+  const data = loadData();
+  const pageSize = getTempPageSize();
+  const totalPages = Math.max(1, Math.ceil(data.tempItems.length / pageSize));
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  setTempCurrentPage(page);
+  renderTempItems();
+}
+
+// ====== Unified Delay Items (临时事项 + 交付件更新) ======
+const DELAY_PAGE_SIZE_KEY = 'tm-delay-page-size';
+const DELAY_PAGE_KEY = 'tm-delay-page';
+let _delayCurrentPage = 1;
+
+function getDelayPageSize() {
+  const v = localStorage.getItem(DELAY_PAGE_SIZE_KEY);
+  if (v === '10' || v === '20') return parseInt(v, 10);
+  return 20;
+}
+function setDelayPageSize(size) {
+  localStorage.setItem(DELAY_PAGE_SIZE_KEY, String(size));
+}
+function getDelayCurrentPage() {
+  return _delayCurrentPage || 1;
+}
+function setDelayCurrentPage(page) {
+  _delayCurrentPage = page;
+}
+function onDelayPageSizeChange() {
+  const size = parseInt(document.getElementById('delayPageSize').value, 10);
+  setDelayPageSize(size);
+  setDelayCurrentPage(1);
+  renderDelayItems();
+}
+function changeDelayPage(page) {
+  const data = loadData();
+  const combined = [...data.tempItems, ...data.deliveryItems];
+  const pageSize = getDelayPageSize();
+  const totalPages = Math.max(1, Math.ceil(combined.length / pageSize));
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+  setDelayCurrentPage(page);
+  renderDelayItems();
+}
+
+function renderDelayItems() {
+  const data = loadData();
+  const pageSizeSelect = document.getElementById('delayPageSize');
+  if (pageSizeSelect) pageSizeSelect.value = String(getDelayPageSize());
+  const typeFilter = (document.getElementById('delayTypeFilter') || {}).value || 'all';
+  const searchVal = ((document.getElementById('delaySearchInput') || {}).value || '').trim().toLowerCase();
+
+  // Combine both sources, tag each with its origin
+  let combined = [];
+  data.tempItems.forEach(t => combined.push(Object.assign({}, t, { _src: 'temp' })));
+  data.deliveryItems.forEach(d => combined.push(Object.assign({}, d, { _src: 'delivery' })));
+
+  // Type filter
+  if (typeFilter === 'temp') combined = combined.filter(x => x._src === 'temp');
+  else if (typeFilter === 'delivery') combined = combined.filter(x => x._src === 'delivery');
+
+  // Search filter (description / id / affected task name)
+  if (searchVal) {
+    combined = combined.filter(x => {
+      if ((x.description || '').toLowerCase().indexOf(searchVal) >= 0) return true;
+      if ((x.id || '').toLowerCase().indexOf(searchVal) >= 0) return true;
+      const allAffected = Array.from(new Set([
+        ...(x.affectedTaskIds || []),
+        ...(x.blockAffectedTaskIds || []),
+        ...(x.processAffectedTaskIds || [])
+      ]));
+      return allAffected.some(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        return task && ((task.projectName || '') + ' ' + (task.taskName || '')).toLowerCase().indexOf(searchVal) >= 0;
+      });
+    });
+  }
+
+  if (combined.length === 0) {
+    document.getElementById('delayList').innerHTML = '<div class="empty-state"><p>暂无延期记录</p></div>';
+    const pag = document.getElementById('delayPagination');
+    if (pag) pag.innerHTML = '';
+    const info = document.getElementById('delayPageInfo');
+    if (info) info.textContent = '第 1 / 1 页，共 0 条';
     return;
   }
 
-  // Sort by date descending, then by input time (createdAt) descending
-  const sorted = [...data.tempItems].sort((a, b) => {
-    const dateCmp = b.date.localeCompare(a.date);
-    if (dateCmp !== 0) return dateCmp;
+  // Sort by date desc, then createdAt desc
+  combined.sort((a, b) => {
+    const dc = b.date.localeCompare(a.date);
+    if (dc !== 0) return dc;
     const ca = a.createdAt || '';
     const cb = b.createdAt || '';
     return cb.localeCompare(ca);
   });
 
-  let html = '<table><thead><tr><th>日期</th><th>事项ID</th><th>时长</th><th>事项</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
-  sorted.forEach(item => {
-    const affectedChips = item.affectedTaskIds.map(tid => {
-      const task = data.tasks.find(t => t.id === tid);
-      return task ? `<span class="impact-chip" title="[${task.projectName}] ${task.taskName}">[${task.projectName}] ${task.taskName}</span>` : '';
-    }).filter(function(s) { return s !== ''; });
+  const pageSize = getDelayPageSize();
+  let currentPage = getDelayCurrentPage();
+  const totalPages = Math.max(1, Math.ceil(combined.length / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+  setDelayCurrentPage(currentPage);
+  const start = (currentPage - 1) * pageSize;
+  const pageItems = combined.slice(start, start + pageSize);
 
-    var affectedCell = '-';
-    if (affectedChips.length > 0) {
-      if (affectedChips.length <= 3) {
-        affectedCell = affectedChips.join(' ');
-      } else {
-        var visibleChips = affectedChips.slice(0, 3).join(' ');
-        var hiddenChips = affectedChips.slice(3).join(' ');
-        affectedCell = visibleChips +
-          '<span class="expand-link" onclick="toggleAffectedTasks(this,\'' + item.id + '\')"> +' + (affectedChips.length - 3) + ' 个</span>' +
-          '<span class="affected-hidden" id="affected-extra-' + item.id + '" style="display:none;"> ' + hiddenChips + '</span>';
-      }
+  const pag = document.getElementById('delayPagination');
+  if (pag) pag.innerHTML = renderDeliveryPagination(combined.length, pageSize, currentPage, 'changeDelayPage');
+  const info = document.getElementById('delayPageInfo');
+  if (info) {
+    const totalPages = Math.max(1, Math.ceil(combined.length / pageSize));
+    info.textContent = `第 ${currentPage} / ${totalPages} 页，共 ${combined.length} 条`;
+  }
+
+  let html = '<table><thead><tr><th>类型</th><th>日期</th><th>记录ID</th><th>时长/处理</th><th>说明</th><th>导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
+  pageItems.forEach(item => {
+    const isDelivery = item._src === 'delivery';
+    const typeLabel = isDelivery ? '交付件更新' : '临时事项';
+    const typeClass = isDelivery ? 'tag-delivery' : 'tag-temp';
+
+    function makeChips(taskIds) {
+      return (taskIds || []).map(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        return task ? `<span class="impact-chip" title="[${task.projectName}] ${task.taskName}">[${task.projectName}] ${task.taskName}</span>` : '';
+      }).filter(s => s !== '');
     }
 
-    const durationDisplay = item.durationUnit === 'd' ? `${item.durationValue}天` : `${item.durationValue}h`;
-    const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
-    const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
-    const delayDisplay = `${itemDelayHours}h → ${delayWorkdays} 工作日`;
+    const blockChips = isDelivery ? makeChips(item.blockAffectedTaskIds) : makeChips(item.affectedTaskIds);
+    const processChips = isDelivery ? makeChips(item.processAffectedTaskIds) : [];
+
+    function renderChips(chips, label, color) {
+      if (chips.length === 0) return '';
+      const labelTag = label ? `<span style="font-size:11px; color:${color || 'var(--text-secondary)'}; margin-right:4px;">${label}</span>` : '';
+      if (chips.length <= 2) return labelTag + chips.join(' ');
+      const visibleChips = chips.slice(0, 2).join(' ');
+      const hiddenChips = chips.slice(2).join(' ');
+      return labelTag + visibleChips +
+        '<span class="expand-link" onclick="toggleAffectedTasks(this,\'' + item.id + '\')"> +' + (chips.length - 2) + ' 个</span>' +
+        '<span class="affected-hidden" id="affected-extra-' + item.id + '" style="display:none;"> ' + hiddenChips + '</span>';
+    }
+
+    let affectedCell = '-';
+    if (isDelivery) {
+      const blockHtml = renderChips(blockChips, '阻塞:', 'var(--primary)');
+      const processHtml = renderChips(processChips, '占用:', '#28a745');
+      if (blockHtml && processHtml) {
+        affectedCell = `<div style="margin-bottom:4px;">${blockHtml}</div><div>${processHtml}</div>`;
+      } else if (blockHtml || processHtml) {
+        affectedCell = blockHtml || processHtml;
+      }
+    } else if (blockChips.length > 0) {
+      affectedCell = renderChips(blockChips);
+    }
+
+    let durationDisplay, delayDisplay;
+    if (isDelivery) {
+      const processDisplay = item.processUnit === 'd' ? `${item.processValue}天` : `${item.processValue}h`;
+      const processHours = item.processUnit === 'd' ? item.processValue * 8 : item.processValue;
+      const processWorkdays = hoursToWorkingDaysOffset(processHours);
+      durationDisplay = processDisplay;
+      const hasBlock = item.blockImpactType !== 'none' && (item.blockAffectedTaskIds || []).length > 0;
+      const hasProcess = item.processImpactType !== 'none' && (item.processAffectedTaskIds || []).length > 0;
+      if (hasBlock && hasProcess) {
+        delayDisplay = `阻塞: ${item.date}+${processWorkdays}天 / 占用: ${item.processStartDate || item.date}+${processWorkdays}天`;
+      } else if (hasBlock) {
+        delayDisplay = `从 ${item.date} 延 ${processWorkdays} 工作日`;
+      } else if (hasProcess) {
+        delayDisplay = `从 ${item.processStartDate || item.date} 延 ${processWorkdays} 工作日`;
+      } else {
+        delayDisplay = `${processWorkdays} 工作日`;
+      }
+    } else {
+      const dDisp = item.durationUnit === 'd' ? `${item.durationValue}天` : `${item.durationValue}h`;
+      const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
+      const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
+      durationDisplay = dDisp;
+      delayDisplay = `${itemDelayHours}h → ${delayWorkdays} 工作日`;
+    }
 
     const attachCount = item.attachments ? item.attachments.length : 0;
     const attachCell = attachCount > 0
-      ? `<span class="attachment-badge" onclick="showTempItemDetail('${item.id}')" style="cursor:pointer;" title="点击查看详情">📎 ${attachCount}</span>`
+      ? `<span class="attachment-badge" onclick="${isDelivery ? `showDeliveryItemDetail('${item.id}')` : `showTempItemDetail('${item.id}')`}" style="cursor:pointer;" title="点击查看详情">📎 ${attachCount}</span>`
       : (hasArchivePath() ? '-' : '<span style="color:var(--text-muted); font-size:11px;">未配置</span>');
 
-    var dispId = item.id;
-    var dispIdShort = item.id.substring(0, 8) + '…';
+    const dispId = item.id;
+    const dispIdShort = item.id.substring(0, 8) + '…';
+    const editFn = isDelivery ? `showDeliveryForm('${item.id}')` : `showTempForm('${item.id}')`;
+    const delFn = isDelivery ? `deleteDeliveryItem('${item.id}')` : `deleteTempItem('${item.id}')`;
+    const copyFn = isDelivery ? `copyDeliveryItemId('${dispId}')` : `copyTempItemId('${dispId}')`;
+    const detailFn = isDelivery ? `showDeliveryItemDetail('${item.id}')` : `showTempItemDetail('${item.id}')`;
+
     html += `<tr>
+      <td><span class="type-tag ${typeClass}">${typeLabel}</span></td>
       <td>${item.date}</td>
-      <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="copyTempItemId('${dispId}')">${dispIdShort}</code></td>
+      <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
-      <td title="${item.description}">${item.description.length > 30 ? item.description.substring(0, 30) + '...' : item.description}</td>
+      <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}</td>
       <td>${delayDisplay}</td>
       <td style="max-width:300px;">${affectedCell}</td>
       <td>${attachCell}</td>
       <td>
-        <button class="btn btn-outline btn-sm" onclick="showTempForm('${item.id}')">编辑</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteTempItem('${item.id}')">删除</button>
+        <button class="btn btn-outline btn-sm" onclick="${detailFn}">详情</button>
+        <button class="btn btn-outline btn-sm" onclick="${editFn}">编辑</button>
+        <button class="btn btn-danger btn-sm" onclick="${delFn}">删除</button>
       </td>
     </tr>`;
   });
   html += '</tbody></table>';
-  document.getElementById('tempList').innerHTML = html;
+  document.getElementById('delayList').innerHTML = html;
+}
+
+// Backwards-compatible wrappers (kept so save/delete call sites keep working)
+function renderTempItems() {
+  renderDelayItems();
+}
+function renderDeliveryItems() {
+  renderDelayItems();
 }
 
 function toggleAffectedTasks(el, itemId) {
@@ -2007,39 +2853,318 @@ function openAttachmentById(tempId, filename) {
   if (item) { openAttachment(item, filename); }
 }
 
-// ====== Review ======
+// ====== Review / Summary ======
+// Local date formatter (avoids UTC shift from toISOString)
+function fmtDateLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Get Monday of the week containing d (Monday as first day)
+function getMonday(d) {
+  const date = new Date(d);
+  const day = (date.getDay() + 6) % 7; // 0 = Monday
+  date.setDate(date.getDate() - day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+// Quick date-range setter for summary
+function setSummaryDateRange(type) {
+  const today = new Date();
+  let start, end;
+  if (type === 'thisweek') {
+    start = getMonday(today);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (type === 'lastweek') {
+    start = getMonday(today); start.setDate(start.getDate() - 7);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (type === 'thismonth') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  } else if (type === 'lastmonth') {
+    start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    end = new Date(today.getFullYear(), today.getMonth(), 0);
+  } else if (type === 'thisyear') {
+    start = new Date(today.getFullYear(), 0, 1);
+    end = new Date(today.getFullYear(), 11, 31);
+  }
+  document.getElementById('summaryDateStart').value = fmtDateLocal(start);
+  document.getElementById('summaryDateEnd').value = fmtDateLocal(end);
+  renderReview();
+}
+
+function getTempItemDelayHours(item) {
+  if (!item) return 0;
+  if (item.delayHours != null) return Number(item.delayHours) || 0;
+  return item.durationUnit === 'd' ? (Number(item.durationValue) || 0) * 8 : (Number(item.durationValue) || 0);
+}
+
+function getTempItemAffectedTasks(item, tasks) {
+  if (!item) return [];
+  if (item.impactType === 'all') return tasks.filter(t => t.status !== '已完成');
+  return tasks.filter(t => item.affectedTaskIds && item.affectedTaskIds.includes(t.id));
+}
+
+function getDeliveryItemProcessHours(item) {
+  if (!item) return 0;
+  if (item.processHours != null) return Number(item.processHours) || 0;
+  return item.processUnit === 'd' ? (Number(item.processValue) || 0) * 8 : (Number(item.processValue) || 0);
+}
+
+function getDeliveryItemAffectedTasks(item, tasks) {
+  if (!item) return [];
+  const allIds = Array.from(new Set([
+    ...(item.affectedTaskIds || []),
+    ...(item.blockAffectedTaskIds || []),
+    ...(item.processAffectedTaskIds || [])
+  ]));
+  if (allIds.length > 0) return tasks.filter(t => allIds.includes(t.id));
+  if (item.blockImpactType === 'all' || item.processImpactType === 'all' || item.impactType === 'all') {
+    return tasks.filter(t => t.status !== '已完成');
+  }
+  return [];
+}
+
 function renderReview() {
   const data = loadData();
+  const direction = document.getElementById('summaryDirection').value;
 
-  // Initialize/update project dropdown filter
+  document.getElementById('reviewProjectGroup').style.display = direction === 'project' ? '' : 'none';
+  document.getElementById('reviewDateGroup').style.display = direction === 'date' ? '' : 'none';
+
+  // Search placeholder and delayed-filter visibility depend on direction
+  const searchInput = document.getElementById('reviewSearchInput');
+  const delayedWrap = document.getElementById('reviewOnlyDelayed').closest('.form-group');
+  if (direction === 'date') {
+    searchInput.placeholder = '输入项目号、任务名称或事项描述...';
+    delayedWrap.style.display = 'none';
+  } else {
+    searchInput.placeholder = '输入项目号或任务名称...';
+    delayedWrap.style.display = 'flex';
+  }
+
+  const q = searchInput.value.trim().toLowerCase();
+
+  // === Direction 2: summarize by date (temp items + delivery items) ===
+  if (direction === 'date') {
+    let s = document.getElementById('summaryDateStart').value;
+    let e = document.getElementById('summaryDateEnd').value;
+    if (!s || !e) {
+      const mon = getMonday(new Date());
+      const sun = new Date(mon); sun.setDate(sun.getDate() + 6);
+      s = fmtDateLocal(mon);
+      e = fmtDateLocal(sun);
+      document.getElementById('summaryDateStart').value = s;
+      document.getElementById('summaryDateEnd').value = e;
+    }
+    const range = { start: s, end: e };
+
+    // Filter temp items by date and search keywords
+    let tempItems = data.tempItems.filter(item => item.date >= range.start && item.date <= range.end);
+    if (q) {
+      tempItems = tempItems.filter(item => {
+        if (item.description && item.description.toLowerCase().includes(q)) return true;
+        const affected = getTempItemAffectedTasks(item, data.tasks);
+        return affected.some(t =>
+          t.projectName.toLowerCase().includes(q) ||
+          (t.projectTitle && t.projectTitle.toLowerCase().includes(q)) ||
+          t.taskName.toLowerCase().includes(q));
+      });
+    }
+
+    // Filter delivery items by date and search keywords
+    let deliveryItems = data.deliveryItems.filter(item => item.date >= range.start && item.date <= range.end);
+    if (q) {
+      deliveryItems = deliveryItems.filter(item => {
+        if (item.description && item.description.toLowerCase().includes(q)) return true;
+        const affected = getDeliveryItemAffectedTasks(item, data.tasks);
+        return affected.some(t =>
+          t.projectName.toLowerCase().includes(q) ||
+          (t.projectTitle && t.projectTitle.toLowerCase().includes(q)) ||
+          t.taskName.toLowerCase().includes(q));
+      });
+    }
+
+    // Sort by date descending, then createdAt descending
+    tempItems.sort((a, b) => {
+      const d = b.date.localeCompare(a.date);
+      if (d !== 0) return d;
+      const ca = a.createdAt || '';
+      const cb = b.createdAt || '';
+      return cb.localeCompare(ca);
+    });
+    deliveryItems.sort((a, b) => {
+      const d = b.date.localeCompare(a.date);
+      if (d !== 0) return d;
+      const ca = a.createdAt || '';
+      const cb = b.createdAt || '';
+      return cb.localeCompare(ca);
+    });
+
+    const totalDelayHours = tempItems.reduce((sum, item) => sum + getTempItemDelayHours(item), 0);
+    const totalProcessHours = deliveryItems.reduce((sum, item) => sum + getDeliveryItemProcessHours(item), 0);
+    const affectedTaskIds = new Set();
+    const affectedProjectNames = new Set();
+    tempItems.forEach(item => {
+      getTempItemAffectedTasks(item, data.tasks).forEach(t => {
+        affectedTaskIds.add(t.id);
+        affectedProjectNames.add(t.projectName);
+      });
+    });
+    deliveryItems.forEach(item => {
+      getDeliveryItemAffectedTasks(item, data.tasks).forEach(t => {
+        affectedTaskIds.add(t.id);
+        affectedProjectNames.add(t.projectName);
+      });
+    });
+
+    const rangeLabel = `${range.start} ~ ${range.end}`;
+    document.getElementById('summaryStats').innerHTML = `
+      <div class="stat-card"><div class="stat-value">${tempItems.length}</div><div class="stat-label">临时事项数</div></div>
+      <div class="stat-card"><div class="stat-value">${deliveryItems.length}</div><div class="stat-label">交付件更新数</div></div>
+      <div class="stat-card"><div class="stat-value">${affectedTaskIds.size}</div><div class="stat-label">影响任务数</div></div>
+      <div class="stat-card"><div class="stat-value">${affectedProjectNames.size}</div><div class="stat-label">影响项目数</div></div>
+      <div class="stat-card"><div class="stat-value">${(totalDelayHours / 8).toFixed(1)}<span style="font-size:14px;">天</span></div><div class="stat-label">临时延期(${totalDelayHours}h)</div></div>
+      <div class="stat-card"><div class="stat-value">${(totalProcessHours / 8).toFixed(1)}<span style="font-size:14px;">天</span></div><div class="stat-label">交付处理(${totalProcessHours}h)</div></div>
+      <div class="stat-card" style="background:transparent;box-shadow:none;text-align:left;padding-left:0;"><div class="stat-label">统计范围：${rangeLabel}</div></div>
+    `;
+
+    let html = '';
+    if (tempItems.length === 0 && deliveryItems.length === 0) {
+      document.getElementById('reviewList').innerHTML = '<div class="empty-state"><p>该日期范围内没有临时事项和交付件更新</p></div>';
+      return;
+    }
+
+    if (tempItems.length > 0) {
+      html += '<h3 style="font-size:14px; font-weight:600; margin:16px 0 8px;">临时事项</h3>';
+      html += '<table><thead><tr><th>日期</th><th>事项描述</th><th>延期时长</th><th>影响范围</th><th>影响任务</th><th>关联项目</th></tr></thead><tbody>';
+      tempItems.forEach(item => {
+        const affected = getTempItemAffectedTasks(item, data.tasks);
+        const delayHours = getTempItemDelayHours(item);
+        const delayDays = (delayHours / 8).toFixed(1);
+        const impactScope = item.impactType === 'all' ? '所有未完成任务' : `${affected.length} 个任务`;
+        const affectedProjects = [...new Set(affected.map(t => t.projectName))].join('、') || '-';
+        const affectedTags = affected.map(t => `<span style="display:inline-block; margin:2px 4px 2px 0; padding:2px 6px; background:#f0f0f0; border-radius:4px; font-size:12px;">${t.projectName} ${t.taskName}</span>`).join('') || '-';
+        html += `<tr>
+          <td class="date-cell">${formatDate(item.date)}</td>
+          <td>${item.description}</td>
+          <td style="white-space:nowrap;">${delayHours}h (${delayDays}天)</td>
+          <td>${impactScope}</td>
+          <td>${affectedTags}</td>
+          <td>${affectedProjects}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
+
+    if (deliveryItems.length > 0) {
+      html += '<h3 style="font-size:14px; font-weight:600; margin:16px 0 8px;">交付件更新</h3>';
+      html += '<table><thead><tr><th>日期</th><th>交付件说明</th><th>处理时长</th><th>影响范围</th><th>影响任务</th><th>关联项目</th></tr></thead><tbody>';
+      deliveryItems.forEach(item => {
+        const affected = getDeliveryItemAffectedTasks(item, data.tasks);
+        const processHours = getDeliveryItemProcessHours(item);
+        const processDays = (processHours / 8).toFixed(1);
+        const impactScope = item.impactType === 'all' ? '所有未完成任务' : `${affected.length} 个任务`;
+        const affectedProjects = [...new Set(affected.map(t => t.projectName))].join('、') || '-';
+        const affectedTags = affected.map(t => `<span style="display:inline-block; margin:2px 4px 2px 0; padding:2px 6px; background:#f0f0f0; border-radius:4px; font-size:12px;">${t.projectName} ${t.taskName}</span>`).join('') || '-';
+        html += `<tr>
+          <td class="date-cell">${formatDate(item.date)}</td>
+          <td>${item.description}</td>
+          <td style="white-space:nowrap;">${processHours}h (${processDays}天)</td>
+          <td>${impactScope}</td>
+          <td>${affectedTags}</td>
+          <td>${affectedProjects}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+    }
+
+    document.getElementById('reviewList').innerHTML = html;
+    return;
+  }
+
+  // === Direction 1: summarize by project ===
   const projects = getUniqueProjectsFromData(data);
   initDropdown('reviewFilterProject', projects, getDropdownValues('reviewFilterProject'));
   const selectedProjects = getDropdownValues('reviewFilterProject');
 
-  // Read delayed-only filter
-  const filterDelayed = document.getElementById('reviewFilterDelayed').value;
-
-  let tasks = data.tasks;
-  // Search filter
-  const reviewSearchQuery = document.getElementById('reviewSearchInput').value.trim().toLowerCase();
-  if (reviewSearchQuery) {
-    tasks = tasks.filter(t => t.projectName.toLowerCase().includes(reviewSearchQuery) || (t.projectTitle && t.projectTitle.toLowerCase().includes(reviewSearchQuery)) || t.taskName.toLowerCase().includes(reviewSearchQuery));
+  let tasks = [...data.tasks];
+  if (q) {
+    tasks = tasks.filter(t =>
+      t.projectName.toLowerCase().includes(q) ||
+      (t.projectTitle && t.projectTitle.toLowerCase().includes(q)) ||
+      t.taskName.toLowerCase().includes(q));
   }
   if (selectedProjects.length > 0) tasks = tasks.filter(t => selectedProjects.includes(t.projectName));
-  if (filterDelayed === 'yes') tasks = tasks.filter(t => t.delayRecords.length > 0);
 
-  if (tasks.length === 0) {
-    document.getElementById('reviewList').innerHTML = '<div class="empty-state"><p>暂无任务数据</p></div>';
+  const visibleTaskIds = new Set(tasks.map(t => t.id));
+  const relatedTempItems = [];
+  data.tempItems.forEach(item => {
+    const affected = getTempItemAffectedTasks(item, data.tasks);
+    if (affected.some(t => visibleTaskIds.has(t.id))) relatedTempItems.push(item);
+  });
+  const relatedDeliveryItems = [];
+  data.deliveryItems.forEach(item => {
+    const affected = getDeliveryItemAffectedTasks(item, data.tasks);
+    if (affected.some(t => visibleTaskIds.has(t.id))) relatedDeliveryItems.push(item);
+  });
+  const dedupDelayHours = relatedTempItems.reduce((sum, item) => sum + getTempItemDelayHours(item), 0);
+  const dedupProcessHours = relatedDeliveryItems.reduce((sum, item) => sum + getDeliveryItemProcessHours(item), 0);
+
+  const relevantRecords = (t) => t.delayRecords || [];
+  let totalDelayRecords = 0;
+  let totalAdjust = 0;
+  let totalTempDelay = 0;
+  let totalDeliveryDelay = 0;
+  let delayedTaskCount = 0;
+  const taskRows = [];
+
+  tasks.forEach(t => {
+    const recs = relevantRecords(t);
+    const adjustCount = recs.filter(r => r.type === 'adjust').length;
+    const tempDelayCount = recs.filter(r => r.type !== 'adjust' && r.type !== 'delivery').length;
+    const deliveryDelayCount = recs.filter(r => r.type === 'delivery').length;
+    const delayHours = recs.reduce((sum, r) => sum + (r.delayHours || 0), 0);
+    if (recs.length > 0) delayedTaskCount++;
+    totalDelayRecords += recs.length;
+    totalAdjust += adjustCount;
+    totalTempDelay += tempDelayCount;
+    totalDeliveryDelay += deliveryDelayCount;
+    taskRows.push({ task: t, recs, adjustCount, tempDelayCount, deliveryDelayCount, delayHours });
+  });
+
+  const onlyDelayed = document.getElementById('reviewOnlyDelayed').checked;
+  let visibleRows = onlyDelayed ? taskRows.filter(r => r.recs.length > 0) : taskRows;
+
+  const rangeLabel = '全部时间';
+  document.getElementById('summaryStats').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${tasks.length}</div><div class="stat-label">任务总数</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--danger);">${delayedTaskCount}</div><div class="stat-label">有延期任务</div></div>
+    <div class="stat-card"><div class="stat-value">${totalDelayRecords}</div><div class="stat-label">延期记录数</div></div>
+    <div class="stat-card"><div class="stat-value">${totalAdjust}</div><div class="stat-label">计划调整次数</div></div>
+    <div class="stat-card"><div class="stat-value">${relatedTempItems.length}</div><div class="stat-label">临时事项数</div></div>
+    <div class="stat-card"><div class="stat-value">${relatedDeliveryItems.length}</div><div class="stat-label">交付件更新数</div></div>
+    <div class="stat-card"><div class="stat-value">${((dedupDelayHours + dedupProcessHours) / 8).toFixed(1)}<span style="font-size:14px;">天</span></div><div class="stat-label">总延期时长(${(dedupDelayHours + dedupProcessHours)}h)</div></div>
+    <div class="stat-card" style="background:transparent;box-shadow:none;text-align:left;padding-left:0;"><div class="stat-label">统计范围：${rangeLabel}</div></div>
+  `;
+
+  if (visibleRows.length === 0) {
+    document.getElementById('reviewList').innerHTML = '<div class="empty-state"><p>暂无符合条件的任务</p></div>';
     return;
   }
 
-  let html = '<table><thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>计划完成</th><th>计划调整</th><th>当前完成</th><th>状态</th><th>延期记录</th></tr></thead><tbody>';
-  tasks.forEach(t => {
-    const delayCount = t.delayRecords.length;
+  let html = '<table><thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>计划完成</th><th>计划调整</th><th>当前完成</th><th>状态</th><th>延期记录</th><th>调整</th><th>临时延期</th><th>交付更新</th><th>延期时长</th></tr></thead><tbody>';
+  visibleRows.forEach(row => {
+    const t = row.task;
+    const delayCount = row.recs.length;
     let delayCell = '-';
     if (delayCount > 0) {
-      delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次记录 — 点击查看详情</span>`;
+      delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount} 次 — 详情</span>`;
     }
+    const daysTask = (row.delayHours / 8).toFixed(1);
     html += `<tr>
       <td>${t.projectName}</td>
       <td class="project-name-cell" title="${t.projectTitle || ''}">${t.projectTitle || '-'}</td>
@@ -2049,6 +3174,10 @@ function renderReview() {
       <td class="date-cell" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
       <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
       <td>${delayCell}</td>
+      <td style="text-align:center;">${row.adjustCount > 0 ? row.adjustCount : '-'}</td>
+      <td style="text-align:center;">${row.tempDelayCount > 0 ? row.tempDelayCount : '-'}</td>
+      <td style="text-align:center;">${row.deliveryDelayCount > 0 ? row.deliveryDelayCount : '-'}</td>
+      <td style="text-align:center; white-space:nowrap;">${row.delayHours > 0 ? daysTask + ' 天' : '-'}</td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -2081,9 +3210,25 @@ function importData(event) {
       }
       // Normalize imported data (backward compat: old exports may lack these keys)
       if (!imported.tempItems || !Array.isArray(imported.tempItems)) imported.tempItems = [];
+      if (!imported.deliveryItems || !Array.isArray(imported.deliveryItems)) imported.deliveryItems = [];
       if (!imported.holidays || !Array.isArray(imported.holidays)) imported.holidays = [];
+      // Normalize legacy delivery items to dual-impact schema
+      imported.deliveryItems.forEach(d => {
+        if (!d.blockImpactType && !d.processImpactType) {
+          d.blockImpactType = d.impactType || 'none';
+          d.blockAffectedTaskIds = d.affectedTaskIds || [];
+          d.processImpactType = 'none';
+          d.processAffectedTaskIds = [];
+          d.processStartDate = d.deliveryDate || d.date;
+        }
+        if (!d.blockImpactType) d.blockImpactType = 'none';
+        if (!d.blockAffectedTaskIds) d.blockAffectedTaskIds = [];
+        if (!d.processImpactType) d.processImpactType = 'none';
+        if (!d.processAffectedTaskIds) d.processAffectedTaskIds = [];
+        if (!d.processStartDate) d.processStartDate = d.deliveryDate || d.date;
+      });
       const choice = confirm(
-        `将导入 ${imported.tasks.length} 条任务和 ${imported.tempItems.length} 条临时事项。\n` +
+        `将导入 ${imported.tasks.length} 条任务、${imported.tempItems.length} 条临时事项和 ${imported.deliveryItems.length} 条交付件更新。\n` +
         `点击「确定」覆盖当前数据，点击「取消」合并到当前数据。`
       );
       const data = loadData();
@@ -2092,9 +3237,10 @@ function importData(event) {
         saveData(imported);
         showToast('数据已覆盖导入');
       } else {
-        // Merge: append new tasks/tempItems with new IDs to avoid conflicts
+        // Merge: append new tasks/tempItems/deliveryItems with new IDs to avoid conflicts
         const existingTaskIds = new Set(data.tasks.map(t => t.id));
         const existingTempIds = new Set(data.tempItems.map(t => t.id));
+        const existingDeliveryIds = new Set(data.deliveryItems.map(t => t.id));
         imported.tasks.forEach(t => {
           if (!existingTaskIds.has(t.id)) {
             data.tasks.push(t);
@@ -2105,8 +3251,13 @@ function importData(event) {
             data.tempItems.push(t);
           }
         });
+        imported.deliveryItems.forEach(t => {
+          if (!existingDeliveryIds.has(t.id)) {
+            data.deliveryItems.push(t);
+          }
+        });
         saveData(data);
-        showToast(`已合并导入：新增 ${imported.tasks.filter(t => !existingTaskIds.has(t.id)).length} 条任务，${imported.tempItems.filter(t => !existingTempIds.has(t.id)).length} 条临时事项`);
+        showToast(`已合并导入：新增 ${imported.tasks.filter(t => !existingTaskIds.has(t.id)).length} 条任务，${imported.tempItems.filter(t => !existingTempIds.has(t.id)).length} 条临时事项，${imported.deliveryItems.filter(t => !existingDeliveryIds.has(t.id)).length} 条交付件更新`);
       }
       renderTasks();
     } catch {
