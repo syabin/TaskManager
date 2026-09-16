@@ -1147,11 +1147,11 @@ function showTaskForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>开始时间</label>
-        <input type="datetime-local" id="mTaskStart" value="${task ? toDT(task.startDate) : nowLocalDT()}">
+        <input type="date" id="mTaskStart" value="${task ? dOnly(task.startDate) : dOnly(nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>计划完成时间</label>
-        <input type="datetime-local" id="mTaskEnd" value="${task ? toDT(task.plannedEndDate) : ''}">
+        <input type="date" id="mTaskEnd" value="${task ? dOnly(task.plannedEndDate) : ''}">
       </div>
       <div class="form-group">
         <label>任务状态</label>
@@ -1426,11 +1426,12 @@ function showTaskDelays(taskId) {
 
   // Sort by date, then by input time (createdAt) for same-day ordering
   const sorted = [...task.delayRecords].sort((a, b) => {
-    const dateCmp = a.date.localeCompare(b.date);
-    if (dateCmp !== 0) return dateCmp;
-    const ca = a.createdAt || '';
-    const cb = b.createdAt || '';
-    return ca.localeCompare(cb);
+    const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
+    if (dCmp !== 0) return dCmp;
+    const da = a.date || '';
+    const db = b.date || '';
+    if (da !== db) return da.localeCompare(db);
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
   });
 
   let timelineHtml = '<div class="timeline">';
@@ -1847,11 +1848,12 @@ function recalcTaskEndDate(task) {
 
   // Sort records by date, then by input time (createdAt) for same-day ordering
   const sorted = [...task.delayRecords].sort((a, b) => {
-    const dateCmp = a.date.localeCompare(b.date);
-    if (dateCmp !== 0) return dateCmp;
-    const ca = a.createdAt || '';
-    const cb = b.createdAt || '';
-    return ca.localeCompare(cb);
+    const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
+    if (dCmp !== 0) return dCmp;
+    const da = a.date || '';
+    const db = b.date || '';
+    if (da !== db) return da.localeCompare(db);
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
   });
 
   // Split calculation by plan adjustments and delivery updates:
@@ -1928,7 +1930,7 @@ function showAdjustForm(taskId, recordId) {
       </div>
       <div class="form-group">
         <label>调整为</label>
-        <input type="datetime-local" id="mAdjustDate" value="${toDT(baseDate)}">
+        <input type="date" id="mAdjustDate" value="${dOnly(baseDate)}">
       </div>
     </div>
     <div class="form-row">
