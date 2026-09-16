@@ -484,14 +484,39 @@ function copyTempItemId(id) {
 }
 
 
+// Display a stored date (YYYY-MM-DD or YYYY-MM-DDTHH:mm) as "YYYY-MM-DD HH:mm"
 function formatDate(d) {
   if (!d) return '-';
+  if (typeof d === 'string' && d.includes('T')) {
+    const parts = d.split('T');
+    const t = (parts[1] || '').slice(0, 5);
+    return t ? `${parts[0]} ${t}` : parts[0];
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
   try {
     const date = new Date(d);
     if (isNaN(date.getTime())) return d;
     return date.toISOString().split('T')[0];
   } catch { return d; }
+}
+
+// Local now datetime in YYYY-MM-DDTHH:mm (for datetime-local inputs)
+function nowLocalDT() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Convert a stored date (YYYY-MM-DD or YYYY-MM-DDTHH:mm) to a datetime-local value
+function toDT(v) {
+  if (!v) return '';
+  if (v.length === 10) return v + 'T00:00';
+  return v;
+}
+
+// Extract YYYY-MM-DD portion (for range comparison)
+function dOnly(d) {
+  return (d || '').slice(0, 10);
 }
 
 // Normalize various date formats to YYYY-MM-DD, returns '' if unrecognized
@@ -630,9 +655,9 @@ function hasArchivePath() {
 }
 
 // Get or create subfolder for a temp item
-// Folder naming: {date}_{id}
+// Folder naming: {date}_{id}  (sanitize ':' and 'T' for filesystem safety)
 function getArchiveDirName(item) {
-  return (item.date || 'no-date') + '_' + item.id;
+  return ((item.date || 'no-date').replace(/[:T]/g, '-')) + '_' + item.id;
 }
 
 async function _getSubDirHandle(item) {
@@ -873,19 +898,20 @@ async function loadHolidaysFromAPI() {
 }
 
 function isWorkingDay(dateStr) {
-  if (HOLIDAYS.has(dateStr)) return false;
-  const d = new Date(dateStr);
+  const ds = (dateStr || '').slice(0, 10);
+  if (HOLIDAYS.has(ds)) return false;
+  const d = new Date(ds + 'T00:00:00');
   const day = d.getDay();
   if (day === 0 || day === 6) {
-    return MAKEUP_WORKDAYS.has(dateStr);
+    return MAKEUP_WORKDAYS.has(ds);
   }
   return true;
 }
 
 function nextWorkingDay(dateStr) {
-  let d = new Date(dateStr);
-  do { d.setDate(d.getDate() + 1); } while (!isWorkingDay(d.toISOString().split('T')[0]));
-  return d.toISOString().split('T')[0];
+  let d = new Date((dateStr || '').slice(0, 10) + 'T00:00:00');
+  do { d.setDate(d.getDate() + 1); } while (!isWorkingDay(fmtDateLocal(d)));
+  return fmtDateLocal(d);
 }
 
 // Convert accumulated hours to working day offset
@@ -896,16 +922,17 @@ function hoursToWorkingDaysOffset(hours) {
 }
 
 // Add working days to a date (skipping weekends and holidays)
+// Accepts YYYY-MM-DD or YYYY-MM-DDTHH:mm; only the date part is used.
 function addWorkingDays(dateStr, workDays) {
   if (!workDays || workDays <= 0 || !dateStr) return dateStr;
-  let d = new Date(dateStr);
+  let d = new Date((dateStr || '').slice(0, 10) + 'T00:00:00');
   if (isNaN(d.getTime())) return dateStr;
   let count = 0;
   while (count < workDays) {
     d.setDate(d.getDate() + 1);
-    if (isWorkingDay(d.toISOString().split('T')[0])) count++;
+    if (isWorkingDay(fmtDateLocal(d))) count++;
   }
-  return d.toISOString().split('T')[0];
+  return fmtDateLocal(d);
 }
 
 // ====== Tab Switching ======
@@ -1120,11 +1147,11 @@ function showTaskForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>开始时间</label>
-        <input type="date" id="mTaskStart" value="${task ? task.startDate : new Date().toISOString().split('T')[0]}">
+        <input type="datetime-local" id="mTaskStart" value="${task ? toDT(task.startDate) : nowLocalDT()}">
       </div>
       <div class="form-group">
         <label>计划完成时间</label>
-        <input type="date" id="mTaskEnd" value="${task ? task.plannedEndDate : ''}">
+        <input type="datetime-local" id="mTaskEnd" value="${task ? toDT(task.plannedEndDate) : ''}">
       </div>
       <div class="form-group">
         <label>任务状态</label>
@@ -1416,7 +1443,7 @@ function showTaskDelays(taskId) {
       accumulatedHours = 0;
       segmentBaseline = record.adjustToDate || task.adjustedEndDate || task.plannedEndDate;
       tag = '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">计划调整</span>';
-      desc = `${record.date} · 调整基准 → ${segmentBaseline}`;
+      desc = `${formatDate(record.date)} · 调整基准 → ${segmentBaseline}`;
     } else if (record.type === 'delivery') {
       const processHours = record.processHours || 0;
       const processDays = hoursToWorkingDaysOffset(processHours);
@@ -1430,7 +1457,7 @@ function showTaskDelays(taskId) {
       const effectLabel = record.effectType === 'process' ? '处理占用' : '交付件阻塞';
       tag = '<span style="background:#e8f5e9;color:#2e7d32;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">交付件更新</span>' +
             '<span style="background:#d4edda;color:#155724;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">' + effectLabel + '</span>';
-      desc = `${baselineDate} · 处理 ${processHours}h → 延后 ${processDays} 个工作日`;
+      desc = `${formatDate(baselineDate)} · 处理 ${processHours}h → 延后 ${processDays} 个工作日`;
       const deliveryItem = record.causedByDeliveryItemId ? data.deliveryItems.find(di => di.id === record.causedByDeliveryItemId) : null;
       if (deliveryItem) {
         extra = `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -1442,7 +1469,7 @@ function showTaskDelays(taskId) {
       accumulatedHours += (record.delayHours || 0);
       const workDays = hoursToWorkingDaysOffset(accumulatedHours);
       tag = '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">临时事项延期</span>';
-      desc = `${record.date} · 累计 ${accumulatedHours}h → 延期 ${workDays} 个工作日`;
+      desc = `${formatDate(record.date)} · 累计 ${accumulatedHours}h → 延期 ${workDays} 个工作日`;
       const tempItem = record.causedByTempItemId ? data.tempItems.find(ti => ti.id === record.causedByTempItemId) : null;
       if (tempItem) {
         extra = `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
@@ -1468,7 +1495,7 @@ function showTaskDelays(taskId) {
       <h3>延期记录 - ${task.taskName}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${task.plannedEndDate} ${task.adjustedEndDate ? ' → 调整为：' + task.adjustedEndDate : ''}</p>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${formatDate(task.plannedEndDate)} ${task.adjustedEndDate ? ' → 调整为：' + formatDate(task.adjustedEndDate) : ''}</p>
     ${timelineHtml}
   `);
 }
@@ -1534,7 +1561,7 @@ function showTempForm(tempId) {
     <div class="form-row">
       <div class="form-group">
         <label>事项日期</label>
-        <input type="date" id="mTempDate" value="${item ? item.date : new Date().toISOString().split('T')[0]}">
+        <input type="datetime-local" id="mTempDate" value="${item ? toDT(item.date) : nowLocalDT()}">
       </div>
       <div class="form-group">
         <label>时长</label>
@@ -1883,7 +1910,7 @@ function showAdjustForm(taskId, recordId) {
   if (!task) return;
   const record = recordId ? task.delayRecords.find(r => r.id === recordId) : null;
   const baseDate = record ? (record.adjustToDate || record.newEndDate || task.adjustedEndDate || task.plannedEndDate) : (task.adjustedEndDate || task.plannedEndDate);
-  const recordDate = record ? (record.date || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0];
+  const recordDate = record ? (record.date || nowLocalDT()) : nowLocalDT();
   const reason = record ? (record.reason === '计划调整' ? '' : record.reason) : '';
   const title = record ? '编辑计划调整' : '计划调整';
   const btnText = record ? '确认修改' : '确认调整';
@@ -1901,13 +1928,13 @@ function showAdjustForm(taskId, recordId) {
       </div>
       <div class="form-group">
         <label>调整为</label>
-        <input type="date" id="mAdjustDate" value="${baseDate}">
+        <input type="datetime-local" id="mAdjustDate" value="${toDT(baseDate)}">
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label>调整日期</label>
-        <input type="date" id="mAdjustRecordDate" value="${recordDate}">
+        <input type="datetime-local" id="mAdjustRecordDate" value="${toDT(recordDate)}">
         <span style="font-size:11px;color:var(--text-muted);">决定调整该计划的日期，可补录前几天的调整</span>
       </div>
     </div>
@@ -2136,11 +2163,11 @@ function showDeliveryForm(deliveryId) {
     <div class="form-row">
       <div class="form-group">
         <label>交付件更新日期</label>
-        <input type="date" id="mDeliveryDate" value="${item ? item.date : new Date().toISOString().split('T')[0]}">
+        <input type="datetime-local" id="mDeliveryDate" value="${item ? toDT(item.date) : nowLocalDT()}">
       </div>
       <div class="form-group">
         <label>开始处理日期</label>
-        <input type="date" id="mDeliveryProcessStartDate" value="${item ? (item.processStartDate || item.deliveryDate || item.date) : new Date().toISOString().split('T')[0]}">
+        <input type="datetime-local" id="mDeliveryProcessStartDate" value="${item ? toDT(item.processStartDate || item.deliveryDate || item.date) : nowLocalDT()}">
       </div>
       <div class="form-group">
         <label>处理时长</label>
@@ -2447,8 +2474,8 @@ function showDeliveryItemDetail(deliveryId) {
   const processDisplay = item.processUnit === 'd' ? `${item.processValue} 天` : `${item.processValue} 小时`;
   const processHours = item.processUnit === 'd' ? item.processValue * 8 : item.processValue;
   const processWorkdays = hoursToWorkingDaysOffset(processHours);
-  const blockDelayDisplay = `从 ${item.date} 延 ${processWorkdays} 工作日`;
-  const processDelayDisplay = `从 ${item.processStartDate || item.date} 延 ${processWorkdays} 工作日`;
+    const blockDelayDisplay = `从 ${formatDate(item.date)} 延 ${processWorkdays} 工作日`;
+    const processDelayDisplay = `从 ${formatDate(item.processStartDate || item.date)} 延 ${processWorkdays} 工作日`;
 
   const blockScopeText = item.blockImpactType === 'all' ? '所有未完成任务' : (item.blockImpactType === 'specific' ? '指定任务' : '无');
   const processScopeText = item.processImpactType === 'all' ? '所有未完成任务' : (item.processImpactType === 'specific' ? '指定任务' : '无');
@@ -2485,8 +2512,8 @@ function showDeliveryItemDetail(deliveryId) {
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>交付件更新日期</label><p>${item.date}</p></div>
-      <div class="form-group"><label>开始处理日期</label><p>${item.processStartDate || item.date}</p></div>
+      <div class="form-group"><label>交付件更新日期</label><p>${formatDate(item.date)}</p></div>
+      <div class="form-group"><label>开始处理日期</label><p>${formatDate(item.processStartDate || item.date)}</p></div>
       <div class="form-group"><label>处理时长</label><p>${processDisplay}</p></div>
     </div>
     <div class="form-group" style="margin-bottom:12px;"><label>交付件说明</label><p>${item.description}</p></div>
@@ -2721,11 +2748,11 @@ function renderDelayItems() {
       const hasBlock = item.blockImpactType !== 'none' && (item.blockAffectedTaskIds || []).length > 0;
       const hasProcess = item.processImpactType !== 'none' && (item.processAffectedTaskIds || []).length > 0;
       if (hasBlock && hasProcess) {
-        delayDisplay = `阻塞: ${item.date}+${processWorkdays}天 / 占用: ${item.processStartDate || item.date}+${processWorkdays}天`;
+        delayDisplay = `阻塞: ${formatDate(item.date)}+${processWorkdays}天 / 占用: ${formatDate(item.processStartDate || item.date)}+${processWorkdays}天`;
       } else if (hasBlock) {
-        delayDisplay = `从 ${item.date} 延 ${processWorkdays} 工作日`;
+        delayDisplay = `从 ${formatDate(item.date)} 延 ${processWorkdays} 工作日`;
       } else if (hasProcess) {
-        delayDisplay = `从 ${item.processStartDate || item.date} 延 ${processWorkdays} 工作日`;
+        delayDisplay = `从 ${formatDate(item.processStartDate || item.date)} 延 ${processWorkdays} 工作日`;
       } else {
         delayDisplay = `${processWorkdays} 工作日`;
       }
@@ -2751,7 +2778,7 @@ function renderDelayItems() {
 
     html += `<tr>
       <td><span class="type-tag ${typeClass}">${typeLabel}</span></td>
-      <td>${item.date}</td>
+      <td>${formatDate(item.date)}</td>
       <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
       <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}</td>
@@ -2834,7 +2861,7 @@ function showTempItemDetail(tempId) {
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>日期</label><p>${item.date}</p></div>
+      <div class="form-group"><label>日期</label><p>${formatDate(item.date)}</p></div>
       <div class="form-group"><label>时长</label><p>${durationDisplay}</p></div>
       <div class="form-group"><label>导致延期</label><p>${delayDisplay}</p></div>
     </div>
@@ -2963,7 +2990,7 @@ function renderReview() {
     const range = { start: s, end: e };
 
     // Filter temp items by date and search keywords
-    let tempItems = data.tempItems.filter(item => item.date >= range.start && item.date <= range.end);
+    let tempItems = data.tempItems.filter(item => dOnly(item.date) >= range.start && dOnly(item.date) <= range.end);
     if (q) {
       tempItems = tempItems.filter(item => {
         if (item.description && item.description.toLowerCase().includes(q)) return true;
@@ -2976,7 +3003,7 @@ function renderReview() {
     }
 
     // Filter delivery items by date and search keywords
-    let deliveryItems = data.deliveryItems.filter(item => item.date >= range.start && item.date <= range.end);
+    let deliveryItems = data.deliveryItems.filter(item => dOnly(item.date) >= range.start && dOnly(item.date) <= range.end);
     if (q) {
       deliveryItems = deliveryItems.filter(item => {
         if (item.description && item.description.toLowerCase().includes(q)) return true;
