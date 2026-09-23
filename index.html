@@ -3551,12 +3551,15 @@ function showBatchImport() {
     </div>
     <div id="importHelpCSV" class="import-format-help">
       <strong>CSV 格式说明：</strong><br>
-      第一行为表头（可选），数据从第二行开始。列顺序：<br>
+      <strong>带表头时列顺序可任意</strong>（按列名识别），表头需使用这些列名：<br>
       <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br>
+      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称）<br>
       支持逗号、Tab、分号、竖线分隔。<br>
       日期支持：<code>2024-06-01</code> <code>2024/06/01</code> <code>2024.06.01</code> <code>2024年06月01日</code> <code>06/01/2024</code> <code>01.06.2024</code><br><br>
-      <strong>示例：</strong><br>
-      <code>PRJ-001,,需求分析,2024-06-01,2024-06-15,未开始</code><br>
+      <strong>示例（带表头，顺序任意）：</strong><br>
+      <code>任务名称,项目号,计划完成时间,开始时间,状态</code><br>
+      <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
+      <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
       <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
     </div>
@@ -3616,6 +3619,98 @@ function handleImportFile(event) {
   event.target.value = '';
 }
 
+// ===== 批量导入：CSV 列解析（带表头时列顺序可任意） =====
+const IMPORT_COL_NAMES = ['项目号', '项目名称', '任务名称', '开始时间', '计划完成时间', '状态'];
+
+// 识别表头行：命中 >=2 个已知列名、且包含「项目号」或「任务名称」时才认定为表头
+// （避免把恰好含「项目」「任务」字样的数据首行误判成表头而整行丢弃）
+// 返回 列名 -> 列索引 映射；非表头返回 null
+function detectCsvHeader(cells) {
+  if (!cells || cells.length < 2) return null;
+  const map = {};
+  let hits = 0;
+  cells.forEach(function(c, idx) {
+    if (IMPORT_COL_NAMES.indexOf(c) >= 0) { map[c] = idx; hits++; }
+  });
+  if (hits < 2) return null;
+  if (map['项目号'] === undefined && map['任务名称'] === undefined) return null;
+  return map;
+}
+
+// 按表头映射取列（列顺序任意）；colMap 为 null 时退回按位置解析（6列/5列两种旧格式）
+function parseCsvRow(parts, colMap) {
+  if (colMap) {
+    const pick = function(name) { return colMap[name] === undefined ? '' : (parts[colMap[name]] || ''); };
+    return {
+      projectName: pick('项目号'),
+      projectTitle: pick('项目名称'),
+      taskName: pick('任务名称'),
+      startDate: pick('开始时间'),
+      plannedEndDate: pick('计划完成时间'),
+      status: pick('状态')
+    };
+  }
+  if (parts.length === 5) {
+    return { projectName: parts[0] || '', projectTitle: '', taskName: parts[1] || '', startDate: parts[2] || '', plannedEndDate: parts[3] || '', status: parts[4] || '未开始' };
+  }
+  return { projectName: parts[0] || '', projectTitle: parts[1] || '', taskName: parts[2] || '', startDate: parts[3] || '', plannedEndDate: parts[4] || '', status: parts[5] || '未开始' };
+}
+
+// 解析 CSV 文本 → { rows, errors }（纯函数，便于单测）
+function parseCsvImport(raw) {
+  const rows = [];
+  const errors = [];
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+  const delimiters = ['\t', ',', ';', '|'];
+  const pickDelim = function(line) {
+    let best = ',', bestCount = 0;
+    delimiters.forEach(function(d) {
+      const count = (line || '').split(d).length;
+      if (count > bestCount) { bestCount = count; best = d; }
+    });
+    return best;
+  };
+
+  // 表头识别：建好 列名→索引 映射后，数据列顺序可任意
+  let startIdx = 0;
+  let colMap = null;
+  if (lines.length > 0) {
+    const detected = detectCsvHeader(lines[0].split(pickDelim(lines[0])).map(c => c.trim()));
+    if (detected) { colMap = detected; startIdx = 1; }
+  }
+
+  const sampleLine = lines[Math.min(startIdx, lines.length - 1)] || '';
+  const bestDelim = pickDelim(sampleLine);
+
+  for (let i = startIdx; i < lines.length; i++) {
+    const parts = lines[i].split(bestDelim).map(p => p.trim());
+    if (parts.length < 2) {
+      errors.push({ row: i + 1, msg: '至少需要项目号和任务名称两列' });
+      continue;
+    }
+    const row = parseCsvRow(parts, colMap);
+    const projectName = row.projectName;
+    const projectTitle = row.projectTitle;
+    const taskName = row.taskName;
+    const startDate = row.startDate;
+    const plannedEndDate = row.plannedEndDate;
+    const status = row.status;
+
+    if (!projectName) { errors.push({ row: i + 1, msg: '项目号为空' }); continue; }
+    if (!taskName) { errors.push({ row: i + 1, msg: '任务名称为空' }); continue; }
+    const nStartDate = normalizeDate(startDate);
+    const nPlannedEndDate = normalizeDate(plannedEndDate);
+    if (startDate && !nStartDate) { errors.push({ row: i + 1, msg: '开始时间格式无法识别: ' + startDate }); continue; }
+    if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: i + 1, msg: '计划完成时间格式无法识别: ' + plannedEndDate }); continue; }
+
+    const validStatus = ['未开始', '进行中', '已完成', '已延期'];
+    const finalStatus = validStatus.includes(status) ? status : '未开始';
+
+    rows.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus });
+  }
+  return { rows, errors };
+}
+
 function previewImportData() {
   const format = document.getElementById('mImportFormat').value;
   const raw = document.getElementById('mImportData').value.trim();
@@ -3625,61 +3720,9 @@ function previewImportData() {
   let errors = [];
 
   if (format === 'csv') {
-    const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
-    let startIdx = 0;
-    if (lines.length > 0) {
-      const firstLine = lines[0].toLowerCase();
-      if (firstLine.includes('项目') || firstLine.includes('project') || firstLine.includes('任务') || firstLine.includes('task')) {
-        startIdx = 1;
-      }
-    }
-    // Auto-detect delimiter: check tab, comma, semicolon, pipe
-    const sampleLine = lines[Math.min(startIdx, lines.length - 1)] || '';
-    const delimiters = ['\t', ',', ';', '|'];
-    let bestDelim = ',';
-    let bestCount = 0;
-    delimiters.forEach(function(d) {
-      const count = sampleLine.split(d).length;
-      if (count > bestCount) { bestCount = count; bestDelim = d; }
-    });
-    for (let i = startIdx; i < lines.length; i++) {
-      const parts = lines[i].split(bestDelim).map(p => p.trim());
-      if (parts.length < 2) {
-        errors.push({ row: i + 1, msg: '至少需要项目号和任务名称两列' });
-        continue;
-      }
-      // Support both old (5 cols) and new (6 cols) format
-      let projectName, projectTitle, taskName, startDate, plannedEndDate, status;
-      if (parts.length === 5) {
-        // Old format: projectName, taskName, startDate, plannedEndDate, status
-        projectName = parts[0] || '';
-        projectTitle = '';
-        taskName = parts[1] || '';
-        startDate = parts[2] || '';
-        plannedEndDate = parts[3] || '';
-        status = parts[4] || '未开始';
-      } else {
-        // New format: projectName, projectTitle, taskName, startDate, plannedEndDate, status
-        projectName = parts[0] || '';
-        projectTitle = parts[1] || '';
-        taskName = parts[2] || '';
-        startDate = parts[3] || '';
-        plannedEndDate = parts[4] || '';
-        status = parts[5] || '未开始';
-      }
-
-      if (!projectName) { errors.push({ row: i + 1, msg: '项目号为空' }); continue; }
-      if (!taskName) { errors.push({ row: i + 1, msg: '任务名称为空' }); continue; }
-      const nStartDate = normalizeDate(startDate);
-      const nPlannedEndDate = normalizeDate(plannedEndDate);
-      if (startDate && !nStartDate) { errors.push({ row: i + 1, msg: '开始时间格式无法识别: ' + startDate }); continue; }
-      if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: i + 1, msg: '计划完成时间格式无法识别: ' + plannedEndDate }); continue; }
-
-      const validStatus = ['未开始', '进行中', '已完成', '已延期'];
-      const finalStatus = validStatus.includes(status) ? status : '未开始';
-
-      importPreviewData.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus });
-    }
+    const parsed = parseCsvImport(raw);
+    importPreviewData = parsed.rows;
+    errors = parsed.errors;
   } else {
     try {
       const arr = JSON.parse(raw);
@@ -3786,12 +3829,15 @@ function showBatchSupplement() {
     </div>
     <div id="importHelpCSV" class="import-format-help">
       <strong>CSV 格式说明：</strong><br>
-      第一行为表头（可选），数据从第二行开始。列顺序：<br>
+      <strong>带表头时列顺序可任意</strong>（按列名识别），表头需使用这些列名：<br>
       <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br>
+      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称）<br>
       支持逗号、Tab、分号、竖线分隔。<br>
       日期支持：<code>2024-06-01</code> <code>2024/06/01</code> <code>2024.06.01</code> <code>2024年06月01日</code> <code>06/01/2024</code> <code>01.06.2024</code><br><br>
-      <strong>示例：</strong><br>
-      <code>PRJ-001,,需求分析,2024-06-01,2024-06-15,未开始</code><br>
+      <strong>示例（带表头，顺序任意）：</strong><br>
+      <code>任务名称,项目号,计划完成时间,开始时间,状态</code><br>
+      <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
+      <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
       <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
     </div>
