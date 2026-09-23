@@ -267,7 +267,6 @@ tr:hover { background: var(--bg-light); }
       <div style="display:flex; gap:8px;">
         <button class="btn btn-secondary" onclick="showBatchImport()">批量导入</button>
         <button class="btn btn-secondary" onclick="showBatchSupplement()" title="批量补录历史任务，并按「计划编制时间 → 现在」区间自动关联历史临时事项">批量补录</button>
-        <button class="btn btn-outline" onclick="recalcAllFromHistory()" title="把所有「影响所有未完成任务」的历史临时事项/交付件更新，按各任务计划完成日之前发生的，自动补关联并重算延期">↺ 按历史重算</button>
         <button class="btn btn-primary" onclick="showTaskForm()">+ 新建任务</button>
       </div>
     </div>
@@ -1303,104 +1302,6 @@ function saveTask(taskId) {
   closeModal();
   showToast("任务已保存");
   renderTasks();
-}
-
-// 按历史临时事项/交付件更新，为所有任务补关联并重算延期
-// 规则（用户确认）：
-//  - 仅继承「影响所有未完成任务」型的历史项（临时事项 impactType==='all'；交付件 block/process 维度 impactType==='all'）
-//  - 仅当该历史项的发生时间 <= 任务的计划完成日（adjustedEndDate || plannedEndDate）才算「历史」
-//  - 已关联过的任务不再重复添加
-function recalcAllFromHistory() {
-  if (!confirm('将遍历所有「影响所有未完成任务」的历史临时事项/交付件更新，\n把发生在各任务计划完成日之前、且尚未关联的记录，补进对应任务并重算延期。\n确定执行？')) return;
-  const data = loadData();
-  let affectedTaskCount = 0;
-  let addedRecordCount = 0;
-  const nowIso = new Date().toISOString();
-
-  data.tasks.forEach(task => {
-    const baseDay = dOnly(task.adjustedEndDate || task.plannedEndDate);
-    if (!baseDay) return;
-    let changed = false;
-
-    // 1) 临时事项：仅 impactType==='all' 且发生在计划完成日之前
-    data.tempItems.forEach(item => {
-      if (item.impactType !== 'all') return;
-      if (dOnly(item.date || '') > baseDay) return;
-      item.affectedTaskIds = item.affectedTaskIds || [];
-      if (item.affectedTaskIds.includes(task.id)) return;
-      item.affectedTaskIds.push(task.id);
-      const delayHours = item.durationUnit === 'd' ? (item.durationValue || 0) * 8 : (item.durationValue || 0);
-      task.delayRecords.push({
-        id: genId(),
-        date: item.date,
-        delayHours,
-        newEndDate: '',
-        causedByTempItemId: item.id,
-        reason: item.description,
-        createdAt: item.createdAt || nowIso
-      });
-      changed = true; addedRecordCount++;
-    });
-
-    // 2) 交付件更新：block / process 双维度，仅 'all' 且在各自基线日之前
-    data.deliveryItems.forEach(item => {
-      const blockAll = item.blockImpactType === 'all';
-      const procAll = item.processImpactType === 'all';
-      if (!blockAll && !procAll) return;
-      const procDate = item.processStartDate || item.date;
-      const processHours = item.processUnit === 'd' ? (item.processValue || 0) * 8 : (item.processValue || 0);
-      item.blockAffectedTaskIds = item.blockAffectedTaskIds || [];
-      item.processAffectedTaskIds = item.processAffectedTaskIds || [];
-      item.affectedTaskIds = item.affectedTaskIds || [];
-
-      if (blockAll && dOnly(item.date || '') <= baseDay && !item.blockAffectedTaskIds.includes(task.id)) {
-        item.blockAffectedTaskIds.push(task.id);
-        if (!item.affectedTaskIds.includes(task.id)) item.affectedTaskIds.push(task.id);
-        task.delayRecords.push({
-          id: genId(),
-          date: item.date,
-          deliveryDate: item.date,
-          processHours: 0,
-          newEndDate: '',
-          causedByDeliveryItemId: item.id,
-          reason: item.description,
-          type: 'delivery',
-          effectType: 'block',
-          createdAt: item.createdAt || nowIso
-        });
-        changed = true; addedRecordCount++;
-      }
-      if (procAll && dOnly(procDate || '') <= baseDay && !item.processAffectedTaskIds.includes(task.id)) {
-        item.processAffectedTaskIds.push(task.id);
-        if (!item.affectedTaskIds.includes(task.id)) item.affectedTaskIds.push(task.id);
-        task.delayRecords.push({
-          id: genId(),
-          date: procDate,
-          deliveryDate: procDate,
-          processStartDate: procDate,
-          processHours,
-          newEndDate: '',
-          causedByDeliveryItemId: item.id,
-          reason: item.description,
-          type: 'delivery',
-          effectType: 'process',
-          createdAt: item.createdAt || nowIso
-        });
-        changed = true; addedRecordCount++;
-      }
-    });
-
-    if (changed) {
-      recalcTaskEndDate(task);
-      affectedTaskCount++;
-    }
-  });
-
-  saveData(data);
-  renderTasks();
-  renderTempItems();
-  renderDeliveryItems();
-  showToast(`已对 ${affectedTaskCount} 个任务补充 ${addedRecordCount} 条历史延期记录`);
 }
 
 function deleteTask(id) {
