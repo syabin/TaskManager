@@ -175,11 +175,22 @@ tr:hover { background: var(--bg-light); }
 .dropdown-panel {
   display: none; position: absolute; top: 100%; left: 0; z-index: 500;
   background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.12); padding: 8px 0; min-width: 200px; max-height: 260px; overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12); padding: 8px 0; min-width: 220px;
 }
 .dropdown-filter.open .dropdown-panel { display: block; }
+/* 面板内检索框：固定在上方，不随列表滚动 */
+.dropdown-search { padding: 0 10px 8px; border-bottom: 1px solid var(--border-light); margin-bottom: 4px; }
+.dropdown-search input {
+  width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 4px; outline: none;
+}
+.dropdown-search input:focus { border-color: var(--primary); }
+/* 选项列表：限高 5 行（每行 30px），超出滚动 */
+.dropdown-list { max-height: 150px; overflow-y: auto; }
+.dropdown-empty { padding: 10px 16px; font-size: 12px; color: var(--text-secondary); text-align: center; }
 .dropdown-item {
-  padding: 6px 16px 6px 36px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 8px; position: relative;
+  padding: 6px 16px 6px 36px; cursor: pointer; font-size: 13px; line-height: 18px;
+  display: flex; align-items: center; gap: 8px; position: relative;
 }
 .dropdown-item:hover { background: var(--bg-light); }
 .dropdown-item::before {
@@ -273,7 +284,7 @@ tr:hover { background: var(--bg-light); }
     <div class="filter-bar">
       <div class="form-group">
         <label>搜索任务</label>
-        <input type="text" id="taskSearchInput" placeholder="输入项目号、项目名称或任务名称..." oninput="renderTasks()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:200px;">
+        <input type="text" id="taskSearchInput" placeholder="输入项目号、项目名称或任务名称..." oninput="renderTasks()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:320px;">
       </div>
       <div class="form-group">
         <label>项目筛选</label>
@@ -978,16 +989,51 @@ function initDropdown(containerId, items, selectedValues) {
   const panel = document.createElement('div');
   panel.className = 'dropdown-panel';
 
-  items.forEach(function(item) {
-    const div = document.createElement('div');
-    div.className = 'dropdown-item' + (selectedValues.indexOf(item) >= 0 ? ' checked' : '');
-    div.textContent = item;
-    div.onclick = function(e) {
-      e.stopPropagation();
-      toggleDropdownItem(containerId, item);
-    };
-    panel.appendChild(div);
-  });
+  // 检索框：关键词存 dataset，面板被重渲染（勾选后 renderTasks 会重建）时仍能保留
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'dropdown-search';
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = '检索...';
+  searchInput.value = container.dataset.searchKw || '';
+  searchInput.onclick = function(e) { e.stopPropagation(); };
+  searchInput.oninput = function() {
+    container.dataset.searchKw = searchInput.value;
+    renderDropdownList(searchInput.value);
+  };
+  searchWrap.appendChild(searchInput);
+  panel.appendChild(searchWrap);
+
+  // 选项列表：限高 5 行，超出滚动（检索框与底部按钮固定不滚动）
+  const list = document.createElement('div');
+  list.className = 'dropdown-list';
+  panel.appendChild(list);
+
+  function renderDropdownList(keyword) {
+    list.innerHTML = '';
+    const k = (keyword || '').trim().toLowerCase();
+    const current = getDropdownValues(containerId);
+    let shown = 0;
+    items.forEach(function(item) {
+      if (k && String(item).toLowerCase().indexOf(k) < 0) return;
+      const div = document.createElement('div');
+      div.className = 'dropdown-item' + (current.indexOf(item) >= 0 ? ' checked' : '');
+      div.textContent = item;
+      div.onclick = function(e) {
+        e.stopPropagation();
+        toggleDropdownItem(containerId, item);
+      };
+      list.appendChild(div);
+      shown++;
+    });
+    if (shown === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'dropdown-empty';
+      empty.textContent = '无匹配项';
+      list.appendChild(empty);
+    }
+  }
+  renderDropdownList(searchInput.value);
 
   // Action buttons
   const actions = document.createElement('div');
