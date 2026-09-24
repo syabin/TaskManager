@@ -3877,7 +3877,8 @@ function executeBatchImport() {
 }
 
 // 批量补录：与「批量导入」一致，额外提供「计划编制时间」
-// 补录后自动把「计划编制时间 → 现在」区间内、影响所有未完成任务型的临时事项关联到新任务，
+// 补录后自动把「起算时间 → 现在」区间内、影响所有未完成任务型的临时事项关联到新任务；
+// 起算时间 = 任务有开始时间则取开始时间，否则取「计划编制时间」；
 // 并剔除发生在该任务计划完成时间（完成时间）之后的记录。
 function showBatchSupplement() {
   importPreviewData = [];
@@ -3891,7 +3892,8 @@ function showBatchSupplement() {
         <label>计划编制时间 <span style="color:#dc3545;">*</span></label>
         <input type="datetime-local" id="mSupplementRecruitTime" style="width:220px;">
         <div style="font-size:12px; color:var(--text-secondary); margin-top:4px; line-height:1.6;">
-          补录后，将把「计划编制时间 → 现在」区间内、「影响所有未完成任务」型的临时事项，自动关联到本次补录的任务；<br>
+          补录后，将把「起算时间 → 现在」区间内、「影响所有未完成任务」型的临时事项，自动关联到本次补录的任务；<br>
+          起算时间：任务有开始时间则从<strong>开始时间</strong>算起，否则从「计划编制时间」算起。<br>
           若任务已填完成时间（点击「完成」时填的实际完成时间），则晚于该完成时间的临时事项不会记入。
         </div>
       </div>
@@ -4008,7 +4010,7 @@ function executeBatchSupplement() {
   const startDTEl = document.getElementById('mSupplementRecruitTime');
   const startDT = startDTEl ? startDTEl.value : '';
   if (!startDT) { showToast('请填写计划编制时间', 'error'); return; }
-  if (!confirm(`确定补录 ${importPreviewData.length} 条任务？\n将自动关联「${startDT.replace('T', ' ')} → 现在」内、「影响所有未完成任务」型的临时事项；任务若已填完成时间，则只记入该完成时间之前的。`)) return;
+  if (!confirm(`确定补录 ${importPreviewData.length} 条任务？\n将自动关联「影响所有未完成任务」型的临时事项；起算时间：任务有开始时间则从开始时间算起，否则从「${startDT.replace('T', ' ')}」算起；任务若已填完成时间，则只记入该完成时间之前的。`)) return;
 
   const data = loadData();
   const nowDT = nowLocalDT();
@@ -4027,7 +4029,9 @@ function executeBatchSupplement() {
       currentEndDate: item.plannedEndDate
     };
     data.tasks.push(task);
-    totalLinked += linkHistoryTempItemsToTask(task, startDT, nowDT, data);
+    // 任务有开始时间 → 从开始时间起算临时事项；否则退回「计划编制时间」
+    const effStart = item.startDate ? (toDT(item.startDate) > startDT ? toDT(item.startDate) : startDT) : startDT;
+    totalLinked += linkHistoryTempItemsToTask(task, effStart, nowDT, data);
   });
 
   saveData(data);
