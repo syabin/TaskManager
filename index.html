@@ -1519,8 +1519,8 @@ function renderTasks() {
     // Skip projects where all tasks are completed (when toggle is on)
     if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
     const projTitle = projTasks[0].projectTitle || '';
-    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}</div><table>
-      <thead><tr><th>项目号</th><th>项目名称</th><th style="width:120px;">项目属性</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
+    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span></div><table>
+      <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
       const delayCount = t.delayRecords.filter(r => r.type !== 'status' && r.type !== 'complete').length;
       const statusCount = t.delayRecords.filter(r => r.type === 'status' || r.type === 'complete').length;
@@ -1528,7 +1528,6 @@ function renderTasks() {
       html += `<tr>
         <td>${t.projectName}</td>
         <td class="project-name-cell" title="${t.projectTitle || ''}">${t.projectTitle || '-'}</td>
-        <td>${projectAttrSelectHtml(t.projectName, data.projectAttrs)}</td>
         <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
         <td class="date-cell" title="${formatDate(t.startDate)}">${formatDate(t.startDate)}</td>
         <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
