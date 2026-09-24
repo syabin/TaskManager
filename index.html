@@ -59,9 +59,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .btn-outline:hover { background: var(--bg-light); }
 
 .card { background: var(--bg-white); border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px var(--shadow); display: flex; flex-direction: column; overflow: hidden; flex: 1; min-height: 0; }
-/* 数据管理 Tab 卡片按内容自适应高度，不拉伸（消除大片空白）；统一水平内边距使标题与正文左对齐，底部留白 */
-#tab-data .card { flex: 0 0 auto; padding: 0 20px 16px; }
-#tab-data .card-header { padding: 16px 0 0; }
+/* 数据管理 Tab 卡片按内容自适应高度，不拉伸（消除大片空白） */
+#tab-data .card { flex: 0 0 auto; }
+/* 任务管理/汇总/数据管理/延期记录 Tab：卡片统一水平内边距 20px，标题、筛选、表格左对齐（延期记录底部为分页条，不留白） */
+#tab-tasks .card, #tab-review .card, #tab-data .card { padding: 0 20px 16px; }
+#tab-tasks .card-header, #tab-review .card-header, #tab-data .card-header { padding: 16px 0 0; }
+#tab-delays .card { padding: 0 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 0; margin-bottom: 8px; flex-shrink: 0; }
 .card-header .btn { padding: 5px 12px; font-size: 13px; }
 .card-title { font-size: 16px; font-weight: 600; }
@@ -316,7 +319,7 @@ tr:hover { background: var(--bg-light); }
 <!-- Tab 2: 延期记录（临时事项 + 交付件更新 统一列表） -->
 <div id="tab-delays" class="tab-content">
   <div class="card">
-    <div class="filter-bar" style="padding:12px 20px; margin-bottom:0; flex-shrink:0; align-items:center;">
+    <div class="filter-bar" style="padding:12px 0; margin-bottom:0; flex-shrink:0; align-items:center;">
       <div class="form-group" style="min-width:90px; flex:0; margin-bottom:0;">
         <select id="delayTypeFilter" onchange="setDelayCurrentPage(1); renderDelayItems()" style="width:110px;" title="类型筛选">
           <option value="all">全部类型</option>
@@ -329,11 +332,11 @@ tr:hover { background: var(--bg-light); }
         <button class="btn btn-primary" onclick="showDeliveryForm()">+ 新建交付件更新</button>
       </div>
     </div>
-    <div style="padding:0 20px 12px; flex-shrink:0;">
+    <div style="padding:0 0 12px; flex-shrink:0;">
       <input type="text" id="delaySearchInput" placeholder="搜索描述 / 记录ID / 任务名..." oninput="setDelayCurrentPage(1); renderDelayItems()" style="padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; outline:none; width:100%; box-sizing:border-box;">
     </div>
     <div id="delayList" style="flex:1; overflow-y:auto; min-height:0;"></div>
-    <div class="pagination-bar" style="padding:10px 20px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; gap:12px;">
+    <div class="pagination-bar" style="padding:10px 0; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; gap:12px;">
       <div style="font-size:13px; color:var(--text-secondary);">
         <span id="delayPageInfo">第 1 / 1 页，共 0 条</span>
       </div>
