@@ -124,6 +124,8 @@ tr:hover { background: var(--bg-light); }
 .project-group th:nth-child(10) { width: 180px; }
 .project-group td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); position: sticky; top: 0; z-index: 2; background: var(--bg-white); padding: 8px 0 6px; border-bottom: 2px solid var(--bg-primary-light); }
+.btn-add-task { margin-left:10px; padding:2px 10px; font-size:14px; line-height:1.4; border:1px solid var(--border); border-radius:4px; background:var(--bg-white); color:var(--primary); cursor:pointer; vertical-align:middle; }
+.btn-add-task:hover { background:var(--bg-primary-light); }
 .project-attr-select { padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-white); cursor: pointer; max-width: 110px; }
 
 .empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
@@ -1185,7 +1187,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ====== Task Management ======
-function showTaskForm(taskId) {
+function showTaskForm(taskId, projectName, projectTitle) {
   const data = loadData();
   const task = taskId ? data.tasks.find(t => t.id === taskId) : null;
   const title = task ? '编辑任务' : '新建任务';
@@ -1197,12 +1199,12 @@ function showTaskForm(taskId) {
     <div class="form-row">
       <div class="form-group">
         <label>项目号 *</label>
-        <input type="text" id="mTaskProject" value="${task ? task.projectName : ''}" placeholder="如：PRJ-001" autocomplete="off" oninput="autoFillProjectTitle()" onkeydown="projectSuggestKeydown(event)">
+        <input type="text" id="mTaskProject" value="${task ? task.projectName : (projectName || '')}" placeholder="如：PRJ-001" autocomplete="off" oninput="autoFillProjectTitle()" onkeydown="projectSuggestKeydown(event)">
         <div class="project-suggest" id="projectSuggest"></div>
       </div>
       <div class="form-group">
         <label>项目名称</label>
-        <input type="text" id="mTaskProjectTitle" value="${task ? (task.projectTitle || '') : ''}" placeholder="项目描述名称">
+        <input type="text" id="mTaskProjectTitle" value="${task ? (task.projectTitle || '') : (projectTitle || '')}" placeholder="项目描述名称">
       </div>
       <div class="form-group">
         <label>任务名称 *</label>
@@ -1225,12 +1227,24 @@ function showTaskForm(taskId) {
         </select>
       </div>
     </div>
+    ${!task && projectName ? `
+    <div style="background:var(--bg-light); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-top:8px; display:flex; align-items:center; gap:8px; font-size:13px;">
+      <input type="checkbox" id="mTaskInheritDelay" checked style="cursor:pointer;">
+      <label for="mTaskInheritDelay" style="cursor:pointer; color:var(--text-secondary);">继承「开始时间 → 现在」内影响所有任务的临时事项（单次补录）</label>
+    </div>` : ''}
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveTask('${taskId || ''}')">保存</button>
+      <button class="btn btn-primary" onclick="saveTask('${taskId || ''}', '${projectName ? escAttr(projectName) : ''}')">保存</button>
     </div>
   `;
   openModal(html);
+}
+
+// 项目标题「＋」：为该项目快速新建任务（预填项目号 + 单次补录开关）
+function addTaskToProject(projectName) {
+  const data = loadData();
+  const proj = data.tasks.find(t => t.projectName === projectName);
+  showTaskForm('', projectName, proj ? (proj.projectTitle || '') : '');
 }
 
 // Fuzzy match project numbers with dropdown suggestions
@@ -1315,22 +1329,24 @@ function projectSuggestKeydown(e) {
   }
 }
 
-function saveTask(taskId) {
-  const projectName = document.getElementById('mTaskProject').value.trim();
+function saveTask(taskId, projectName) {
+  const projectNameEl = document.getElementById('mTaskProject');
+  const inputProjectName = projectNameEl ? projectNameEl.value.trim() : (projectName || '').trim();
   const projectTitle = document.getElementById('mTaskProjectTitle').value.trim();
   const taskName = document.getElementById('mTaskName').value.trim();
   const startDate = document.getElementById('mTaskStart').value;
   const plannedEndDate = document.getElementById('mTaskEnd').value;
   const status = document.getElementById('mTaskStatus').value;
+  const inheritDelayEl = document.getElementById('mTaskInheritDelay');
 
-  if (!projectName || !taskName) { showToast('请填写项目号和任务名称', 'error'); return; }
+  if (!inputProjectName || !taskName) { showToast('请填写项目号和任务名称', 'error'); return; }
 
   const data = loadData();
   if (taskId) {
     const task = data.tasks.find(t => t.id === taskId);
     if (task) {
       const prevStatus = task.status;
-      task.projectName = projectName;
+      task.projectName = inputProjectName;
       task.projectTitle = projectTitle;
       task.taskName = taskName;
       task.startDate = startDate;
@@ -1349,9 +1365,9 @@ function saveTask(taskId) {
       }
     }
   } else {
-    data.tasks.push({
+    const newTask = {
       id: genId(),
-      projectName,
+      projectName: inputProjectName,
       projectTitle,
       taskName,
       startDate,
@@ -1360,12 +1376,21 @@ function saveTask(taskId) {
       status,
       delayRecords: [],
       currentEndDate: plannedEndDate
-    });
+    };
+    data.tasks.push(newTask);
+    // 单次补录：继承「开始时间 → 现在」内、影响所有任务的临时事项
+    if (inheritDelayEl && inheritDelayEl.checked && startDate) {
+      const startDT = toDT(startDate);
+      const nowDT = nowLocalDT();
+      const linked = linkHistoryTempItemsToTask(newTask, startDT, nowDT, data);
+      if (linked > 0) showToast(`已继承 ${linked} 条影响所有任务的临时事项`, 'success');
+    }
   }
   saveData(data);
   closeModal();
   showToast("任务已保存");
   renderTasks();
+  renderTempItems();
 }
 
 function deleteTask(id) {
@@ -1526,7 +1551,7 @@ function renderTasks() {
     // Skip projects where all tasks are completed (when toggle is on)
     if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
     const projTitle = projTasks[0].projectTitle || '';
-    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span></div><table>
+    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span><button class="btn-add-task" title="为该项目新建任务" onclick="addTaskToProject('${escAttr(proj)}')">＋</button></div><table>
       <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
       const delayCount = t.delayRecords.filter(r => r.type !== 'status' && r.type !== 'complete').length;
@@ -3604,8 +3629,8 @@ function showBatchImport() {
     <div id="importHelpCSV" class="import-format-help">
       <strong>CSV 格式说明：</strong><br>
       <strong>带表头时列顺序可任意</strong>（按列名识别），表头需使用这些列名：<br>
-      <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code> <code>项目属性</code><br>
-      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称；可追加第7列「项目属性：售前/售中/售后」）<br>
+      <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br>
+      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称）<br>
       支持逗号、Tab、分号、竖线分隔。<br>
       日期支持：<code>2024-06-01</code> <code>2024/06/01</code> <code>2024.06.01</code> <code>2024年06月01日</code> <code>06/01/2024</code> <code>01.06.2024</code><br><br>
       <strong>示例（带表头，顺序任意）：</strong><br>
@@ -3613,14 +3638,14 @@ function showBatchImport() {
       <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
       <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
-      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
+      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）<br>
+      提示：项目属性（售前/售中/售后）不在导入范围，导入后请在项目标题右侧的下拉中手动设置。
     </div>
     <div id="importHelpJSON" class="import-format-help" style="display:none;">
       <strong>JSON 格式说明：</strong><br>
       数组格式，每个元素包含以下字段：<br>
       <code>projectName</code> 项目号（必填）<br>
       <code>projectTitle</code> 项目名称（可选）<br>
-      <code>projectAttr</code> 项目属性（可选：售前/售中/售后）<br>
       <code>taskName</code> 任务名称（必填）<br>
       <code>startDate</code> 开始时间<br>
       <code>plannedEndDate</code> 计划完成时间<br>
@@ -3673,7 +3698,7 @@ function handleImportFile(event) {
 }
 
 // ===== 批量导入：CSV 列解析（带表头时列顺序可任意） =====
-const IMPORT_COL_NAMES = ['项目号', '项目名称', '任务名称', '开始时间', '计划完成时间', '状态', '项目属性'];
+const IMPORT_COL_NAMES = ['项目号', '项目名称', '任务名称', '开始时间', '计划完成时间', '状态'];
 
 // 识别表头行：命中 >=2 个已知列名、且包含「项目号」或「任务名称」时才认定为表头
 // （避免把恰好含「项目」「任务」字样的数据首行误判成表头而整行丢弃）
@@ -3700,14 +3725,13 @@ function parseCsvRow(parts, colMap) {
       taskName: pick('任务名称'),
       startDate: pick('开始时间'),
       plannedEndDate: pick('计划完成时间'),
-      status: pick('状态'),
-      projectAttr: pick('项目属性')
+      status: pick('状态')
     };
   }
   if (parts.length === 5) {
-    return { projectName: parts[0] || '', projectTitle: '', taskName: parts[1] || '', startDate: parts[2] || '', plannedEndDate: parts[3] || '', status: parts[4] || '未开始', projectAttr: '' };
+    return { projectName: parts[0] || '', projectTitle: '', taskName: parts[1] || '', startDate: parts[2] || '', plannedEndDate: parts[3] || '', status: parts[4] || '未开始' };
   }
-  return { projectName: parts[0] || '', projectTitle: parts[1] || '', taskName: parts[2] || '', startDate: parts[3] || '', plannedEndDate: parts[4] || '', status: parts[5] || '未开始', projectAttr: parts[6] ? parts[6] : '' };
+  return { projectName: parts[0] || '', projectTitle: parts[1] || '', taskName: parts[2] || '', startDate: parts[3] || '', plannedEndDate: parts[4] || '', status: parts[5] || '未开始' };
 }
 
 // 解析 CSV 文本 → { rows, errors }（纯函数，便于单测）
@@ -3760,7 +3784,7 @@ function parseCsvImport(raw) {
     const validStatus = ['未开始', '进行中', '已完成', '已延期'];
     const finalStatus = validStatus.includes(status) ? status : '未开始';
 
-    rows.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus, projectAttr: (row.projectAttr || '').trim() });
+    rows.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus });
   }
   return { rows, errors };
 }
@@ -3807,9 +3831,9 @@ function previewImportData() {
   previewHtml += '</div>';
 
   if (importPreviewData.length > 0) {
-    previewHtml += '<div class="import-preview"><table><thead><tr><th>项目号</th><th>项目名称</th><th>项目属性</th><th>任务名称</th><th>开始时间</th><th>计划完成</th><th>状态</th></tr></thead><tbody>';
+    previewHtml += '<div class="import-preview"><table><thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成</th><th>状态</th></tr></thead><tbody>';
     importPreviewData.slice(0, 100).forEach(row => {
-      previewHtml += `<tr class="import-row-ok"><td>${row.projectName}</td><td>${row.projectTitle || '-'}</td><td>${row.projectAttr || '-'}</td><td>${row.taskName}</td><td>${row.startDate || '-'}</td><td>${row.plannedEndDate || '-'}</td><td>${row.status}</td></tr>`;
+      previewHtml += `<tr class="import-row-ok"><td>${row.projectName}</td><td>${row.projectTitle || '-'}</td><td>${row.taskName}</td><td>${row.startDate || '-'}</td><td>${row.plannedEndDate || '-'}</td><td>${row.status}</td></tr>`;
     });
     if (importPreviewData.length > 100) {
       previewHtml += `<tr><td colspan="7" style="text-align:center; color:#999;">... 还有 ${importPreviewData.length - 100} 条数据</td></tr>`;
@@ -3844,9 +3868,6 @@ function executeBatchImport() {
       delayRecords: [],
       currentEndDate: item.plannedEndDate
     });
-    if (item.projectAttr && PROJECT_ATTRS.includes(item.projectAttr)) {
-      data.projectAttrs[item.projectName] = item.projectAttr;
-    }
   });
   saveData(data);
   showToast(`成功导入 ${importPreviewData.length} 条任务`);
@@ -3887,8 +3908,8 @@ function showBatchSupplement() {
     <div id="importHelpCSV" class="import-format-help">
       <strong>CSV 格式说明：</strong><br>
       <strong>带表头时列顺序可任意</strong>（按列名识别），表头需使用这些列名：<br>
-      <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code> <code>项目属性</code><br>
-      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称；可追加第7列「项目属性：售前/售中/售后」）<br>
+      <code>项目号</code> <code>项目名称</code> <code>任务名称</code> <code>开始时间</code> <code>计划完成时间</code> <code>状态</code><br>
+      不带表头时按固定顺序：<code>项目号,项目名称,任务名称,开始时间,计划完成时间,状态</code>（5列格式则省略项目名称）<br>
       支持逗号、Tab、分号、竖线分隔。<br>
       日期支持：<code>2024-06-01</code> <code>2024/06/01</code> <code>2024.06.01</code> <code>2024年06月01日</code> <code>06/01/2024</code> <code>01.06.2024</code><br><br>
       <strong>示例（带表头，顺序任意）：</strong><br>
@@ -3896,14 +3917,14 @@ function showBatchSupplement() {
       <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
       <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
-      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）
+      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）<br>
+      提示：项目属性（售前/售中/售后）不在导入范围，导入后请在项目标题右侧的下拉中手动设置。
     </div>
     <div id="importHelpJSON" class="import-format-help" style="display:none;">
       <strong>JSON 格式说明：</strong><br>
       数组格式，每个元素包含以下字段：<br>
       <code>projectName</code> 项目号（必填）<br>
       <code>projectTitle</code> 项目名称（可选）<br>
-      <code>projectAttr</code> 项目属性（可选：售前/售中/售后）<br>
       <code>taskName</code> 任务名称（必填）<br>
       <code>startDate</code> 开始时间<br>
       <code>plannedEndDate</code> 计划完成时间<br>
@@ -4006,9 +4027,6 @@ function executeBatchSupplement() {
       currentEndDate: item.plannedEndDate
     };
     data.tasks.push(task);
-    if (item.projectAttr && PROJECT_ATTRS.includes(item.projectAttr)) {
-      data.projectAttrs[item.projectName] = item.projectAttr;
-    }
     totalLinked += linkHistoryTempItemsToTask(task, startDT, nowDT, data);
   });
 
