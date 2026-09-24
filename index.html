@@ -424,6 +424,35 @@ tr:hover { background: var(--bg-light); }
       <p>当前数据量：<span id="dataCount"></span></p>
     </div>
   </div>
+  <div class="card" style="margin-top:16px;">
+    <div class="card-header">
+      <span class="card-title">WebDAV 云端存档</span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <label style="min-width:72px;">服务器地址</label>
+        <input type="text" id="webdavUrl" placeholder="https://dav.example.com/TaskManager/" style="flex:1; min-width:240px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;">
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <label style="min-width:72px;">用户名</label>
+        <input type="text" id="webdavUser" style="width:180px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;">
+        <label style="min-width:48px;">密码</label>
+        <input type="password" id="webdavPass" style="width:180px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px;">
+        <button class="btn btn-outline btn-sm" onclick="saveWebdavConfigFromUI()">保存连接</button>
+        <button class="btn btn-outline btn-sm" onclick="testWebdavConnection()">测试连接</button>
+      </div>
+    </div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
+      <button class="btn btn-primary" onclick="syncToWebdav()">同步到 WebDAV（配置+附件，增量）</button>
+      <button class="btn btn-secondary" onclick="restoreFromWebdav()">从 WebDAV 恢复</button>
+    </div>
+    <p style="font-size:12px; color:var(--text-muted); margin-top:8px; line-height:1.6;">
+      配置以整文件上传（<code>task-manager-data.json</code>）；附件按增量处理（仅上传新增/变更文件、删除本地已移除的）。<br>
+      「从 WebDAV 恢复」会<strong>用云端覆盖本地全部配置</strong>，并下载附件到本地存档文件夹（需先设置本地存档路径）。<br>
+      注意：浏览器直连 WebDAV 需服务器开启 <strong>CORS</strong>，否则请求会被浏览器拦截（可用支持 CORS 的 WebDAV 服务或本地代理解决）。
+    </p>
+    <div id="webdavStatus" style="font-size:13px; margin-top:8px;"></div>
+  </div>
 </div>
 
 <!-- Modal -->
@@ -4013,6 +4042,261 @@ function executeBatchSupplement() {
   renderTempItems();
 }
 
+// ====== WebDAV 云端存档 ======
+// 连接配置单独存（不进数据导出）；密码仅本地。
+const WEBDAV_KEY = 'tm-webdav-config';
+function loadWebdavConfig() {
+  try { const v = localStorage.getItem(WEBDAV_KEY); return v ? JSON.parse(v) : {}; } catch (e) { return {}; }
+}
+function saveWebdavConfig(cfg) { localStorage.setItem(WEBDAV_KEY, JSON.stringify(cfg)); }
+
+function webdavBase() {
+  let u = (loadWebdavConfig().url || '').trim();
+  if (!u) return '';
+  if (!u.endsWith('/')) u += '/';
+  return u;
+}
+function webdavAuthHeader() {
+  const c = loadWebdavConfig();
+  if (!c.username) return '';
+  return 'Basic ' + btoa(unescape(encodeURIComponent(c.username + ':' + (c.password || ''))));
+}
+function webdavStatus(msg, type) {
+  const el = document.getElementById('webdavStatus');
+  if (!el) return;
+  const color = type === 'error' ? '#dc3545' : type === 'success' ? '#198754' : '#0c5460';
+  el.innerHTML = `<span style="color:${color};">${msg}</span>`;
+}
+
+async function webdavReq(method, relPath, opts) {
+  opts = opts || {};
+  const base = webdavBase();
+  if (!base) throw new Error('未配置 WebDAV 地址');
+  const url = base + String(relPath).replace(/^\/+/, '');
+  const headers = Object.assign({}, opts.headers);
+  const auth = webdavAuthHeader();
+  if (auth) headers['Authorization'] = auth;
+  const init = { method: method, headers: headers };
+  if (opts.body !== undefined) init.body = opts.body;
+  return fetch(url, init);
+}
+async function webdavMkcol(relPath) {
+  const resp = await webdavReq('MKCOL', relPath);
+  if (![201, 405, 409, 200].includes(resp.status)) {
+    const txt = await resp.text().catch(function () { return ''; });
+    throw new Error('创建目录失败 ' + resp.status + ' ' + txt.slice(0, 120));
+  }
+  return true;
+}
+async function webdavPut(relPath, body, contentType) {
+  const resp = await webdavReq('PUT', relPath, { body: body, headers: { 'Content-Type': contentType || 'application/octet-stream' } });
+  if (![200, 201, 204].includes(resp.status)) {
+    const txt = await resp.text().catch(function () { return ''; });
+    throw new Error('上传失败 ' + resp.status + ' ' + txt.slice(0, 120));
+  }
+  return true;
+}
+async function webdavGet(relPath) {
+  const resp = await webdavReq('GET', relPath);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error('下载失败 ' + resp.status);
+  return resp;
+}
+async function webdavDelete(relPath) {
+  const resp = await webdavReq('DELETE', relPath);
+  if (![200, 204, 404].includes(resp.status)) {
+    const txt = await resp.text().catch(function () { return ''; });
+    throw new Error('删除失败 ' + resp.status + ' ' + txt.slice(0, 120));
+  }
+  return true;
+}
+async function webdavPropfind(relPath, depth) {
+  const resp = await webdavReq('PROPFIND', relPath, {
+    headers: { Depth: depth || '1', 'Content-Type': 'application/xml; charset=utf-8' },
+    body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/></d:prop></d:propfind>'
+  });
+  if (!resp.ok) { const txt = await resp.text().catch(function () { return ''; }); throw new Error('列目录失败 ' + resp.status + ' ' + txt.slice(0, 120)); }
+  const xml = await resp.text();
+  return parsePropfind(xml, webdavBase(), String(relPath).replace(/^\/+/, ''));
+}
+function parsePropfind(xml, base, selfRel) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const responses = doc.getElementsByTagName('d:response');
+  const out = [];
+  for (let i = 0; i < responses.length; i++) {
+    const hrefEl = responses[i].getElementsByTagName('d:href')[0];
+    if (!hrefEl) continue;
+    let path = decodeURIComponent(hrefEl.textContent || '');
+    if (base && path.indexOf(base) === 0) path = path.slice(base.length);
+    path = path.replace(/^\/+/, '').replace(/\/$/, '');
+    if (path === selfRel) continue; // 跳过自身
+    const resType = responses[i].getElementsByTagName('d:resourcetype')[0];
+    const isDir = !!(resType && resType.getElementsByTagName('d:collection').length > 0);
+    let size = 0;
+    const cl = responses[i].getElementsByTagName('d:getcontentlength')[0];
+    if (cl && cl.textContent) size = parseInt(cl.textContent, 10) || 0;
+    let etag = '';
+    const et = responses[i].getElementsByTagName('d:getetag')[0];
+    if (et) etag = (et.textContent || '').replace(/"/g, '');
+    out.push({ path: path, isDir: isDir, size: size, etag: etag });
+  }
+  return out;
+}
+
+// 读取某 item 的本地附件文件名列表（含字节读取器）
+async function collectLocalAttachments(data) {
+  if (!_archiveHandle) return [];
+  const all = [].concat(data.tasks || [], data.tempItems || [], data.deliveryItems || []);
+  const result = [];
+  for (let i = 0; i < all.length; i++) {
+    const item = all[i];
+    if (!item.attachments || item.attachments.length === 0) continue;
+    const subDir = await _getSubDirHandle(item);
+    if (!subDir) continue;
+    const files = [];
+    for (let j = 0; j < item.attachments.length; j++) {
+      const name = item.attachments[j].name;
+      try {
+        const fh = await subDir.getFileHandle(name);
+        const f = await fh.getFile();
+        files.push({ name: name, size: f.size, type: f.type, getBytes: async function () { return new Uint8Array(await f.arrayBuffer()); } });
+      } catch (e) { /* 文件缺失则跳过 */ }
+    }
+    if (files.length) result.push({ itemId: item.id, files: files });
+  }
+  return result;
+}
+
+// 保存连接配置（从 UI 输入框读取）
+function saveWebdavConfigFromUI() {
+  const cfg = {
+    url: (document.getElementById('webdavUrl').value || '').trim(),
+    username: (document.getElementById('webdavUser').value || '').trim(),
+    password: document.getElementById('webdavPass').value || ''
+  };
+  saveWebdavConfig(cfg);
+  webdavStatus('连接已保存' + (cfg.url ? '：' + cfg.url : ''), 'success');
+}
+// 初始化时回填 UI
+function renderWebdavConfig() {
+  const cfg = loadWebdavConfig();
+  const u = document.getElementById('webdavUrl'); if (u) u.value = cfg.url || '';
+  const n = document.getElementById('webdavUser'); if (n) n.value = cfg.username || '';
+  const p = document.getElementById('webdavPass'); if (p) p.value = cfg.password || '';
+}
+
+async function testWebdavConnection() {
+  try {
+    saveWebdavConfigFromUI();
+    const resp = await webdavReq('PROPFIND', '', { headers: { Depth: '0' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>' });
+    if (resp.ok || resp.status === 207) webdavStatus('连接成功（HTTP ' + resp.status + '）', 'success');
+    else webdavStatus('连接返回 ' + resp.status, 'error');
+  } catch (e) {
+    webdavStatus('连接失败：' + e.message, 'error');
+  }
+}
+
+// 同步到 WebDAV：配置整文件覆盖 + 附件增量（仅传新增/变更、删已移除）
+async function syncToWebdav() {
+  try {
+    webdavStatus('同步中…', 'info');
+    const base = webdavBase();
+    if (!base) { webdavStatus('请先填写并保存 WebDAV 地址', 'error'); return; }
+    // 1) 配置整文件上传
+    const data = loadData();
+    await webdavPut('task-manager-data.json', JSON.stringify(data, null, 2), 'application/json');
+    // 2) 附件增量
+    await webdavMkcol('attachments');
+    const localItems = await collectLocalAttachments(data);
+    // 远端已有的 item 子目录（用于清理已无附件的项目）
+    let remoteTop = [];
+    try { remoteTop = await webdavPropfind('attachments', '1'); } catch (e) { remoteTop = []; }
+    const remoteItemDirs = new Set(remoteTop.filter(function (f) { return f.isDir && f.path && f.path !== 'attachments'; }).map(function (f) { return f.path.replace(/^attachments\//, ''); }));
+    for (let i = 0; i < localItems.length; i++) {
+      const it = localItems[i];
+      const relDir = 'attachments/' + it.itemId;
+      await webdavMkcol(relDir);
+      let remoteFiles = {};
+      try { const rf = await webdavPropfind(relDir, '1'); rf.forEach(function (f) { if (!f.isDir) remoteFiles[f.path.split('/').pop()] = f; }); } catch (e) { remoteFiles = {}; }
+      for (let j = 0; j < it.files.length; j++) {
+        const f = it.files[j];
+        const relPath = relDir + '/' + encodeURIComponent(f.name);
+        const remote = remoteFiles[f.name];
+        if (!remote || remote.size !== f.size) {
+          const bytes = await f.getBytes();
+          await webdavPut(relPath, bytes, f.type || 'application/octet-stream');
+        }
+      }
+      // 删除远端多余文件（本地已移除的）
+      Object.keys(remoteFiles).forEach(function (rname) {
+        if (!it.files.some(function (f) { return f.name === rname; })) {
+          webdavDelete(relDir + '/' + encodeURIComponent(rname)).catch(function () {});
+        }
+      });
+    }
+    // 清理已无附件的远端 item 目录
+    remoteItemDirs.forEach(function (rdir) {
+      if (!localItems.some(function (it) { return it.itemId === rdir; })) {
+        webdavDelete('attachments/' + rdir).catch(function () {});
+      }
+    });
+    webdavStatus('同步完成：配置已上传，附件按增量处理（' + localItems.reduce(function (s, it) { return s + it.files.length; }, 0) + ' 个文件）。', 'success');
+  } catch (e) {
+    webdavStatus('同步失败：' + e.message, 'error');
+  }
+}
+
+// 从 WebDAV 恢复：用云端配置覆盖本地 + 下载附件到本地存档文件夹
+async function restoreFromWebdav() {
+  try {
+    webdavStatus('恢复中…', 'info');
+    const base = webdavBase();
+    if (!base) { webdavStatus('请先填写并保存 WebDAV 地址', 'error'); return; }
+    const resp = await webdavGet('task-manager-data.json');
+    if (!resp) { webdavStatus('云端未找到 task-manager-data.json', 'error'); return; }
+    const imported = JSON.parse(await resp.text());
+    if (!imported.tasks) throw new Error('无效的配置文件');
+    if (!confirm('将从 WebDAV 恢复全部配置，覆盖本地数据。确定继续？')) return;
+    saveData(imported);
+    // 附件下载
+    let downloaded = 0;
+    if (_archiveHandle) {
+      let top = [];
+      try { top = await webdavPropfind('attachments', '1'); } catch (e) { top = []; }
+      const itemDirs = top.filter(function (f) { return f.isDir && f.path && f.path !== 'attachments'; }).map(function (f) { return f.path.replace(/^attachments\//, ''); });
+      for (let i = 0; i < itemDirs.length; i++) {
+        const idir = itemDirs[i];
+        const item = [].concat(imported.tasks, imported.tempItems, imported.deliveryItems).find(function (t) { return t.id === idir; });
+        if (!item) continue;
+        const subDir = await _getSubDirHandle(item);
+        if (!subDir) continue;
+        let rf = [];
+        try { rf = await webdavPropfind('attachments/' + idir, '1'); } catch (e) { rf = []; }
+        for (let k = 0; k < rf.length; k++) {
+          const f = rf[k];
+          if (f.isDir) continue;
+          const fname = f.path.split('/').pop();
+          const r = await webdavGet('attachments/' + idir + '/' + encodeURIComponent(fname));
+          if (!r) continue;
+          const buf = await r.arrayBuffer();
+          const fh = await subDir.getFileHandle(fname, { create: true });
+          const w = await fh.createWritable();
+          await w.write(buf);
+          await w.close();
+          downloaded++;
+        }
+      }
+      webdavStatus('恢复完成：配置已覆盖，附件已下载 ' + downloaded + ' 个到本地存档文件夹。', 'success');
+    } else {
+      webdavStatus('恢复完成：配置已覆盖（未设置本地存档路径，附件未下载）。', 'success');
+    }
+    renderTasks();
+    updateDataStatus();
+  } catch (e) {
+    webdavStatus('恢复失败：' + e.message, 'error');
+  }
+}
+
 // ====== Init ======
 async function init() {
   // 清理临时事项中的displayId字段（已废）
@@ -4030,6 +4314,8 @@ async function init() {
 
   updateDataStatus();
   renderTasks();
+  // 回填已保存的 WebDAV 连接配置
+  renderWebdavConfig();
   // 异步加载官方节假日数据
   await loadHolidaysFromAPI();
   // 恢复存档路径
