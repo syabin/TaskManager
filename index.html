@@ -59,8 +59,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .btn-outline:hover { background: var(--bg-light); }
 
 .card { background: var(--bg-white); border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px var(--shadow); display: flex; flex-direction: column; overflow: hidden; flex: 1; min-height: 0; }
-/* 数据管理 Tab 卡片按内容自适应高度，不拉伸（消除大片空白） */
-#tab-data .card { flex: 0 0 auto; }
+/* 数据管理 Tab 卡片按内容自适应高度，不拉伸（消除大片空白）；统一水平内边距使标题与正文左对齐，底部留白 */
+#tab-data .card { flex: 0 0 auto; padding: 0 20px 16px; }
+#tab-data .card-header { padding: 16px 0 0; }
 .card-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 0; margin-bottom: 8px; flex-shrink: 0; }
 .card-header .btn { padding: 5px 12px; font-size: 13px; }
 .card-title { font-size: 16px; font-weight: 600; }
