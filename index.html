@@ -258,7 +258,16 @@ tr:hover { background: var(--bg-light); }
 .attachment-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-light); border-radius: 6px; font-size: 13px; }
 .attachment-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-item-size { color: var(--text-muted); font-size: 11px; }
-.attachment-badge { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
+  .attachment-badge { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
+
+/* 撤回功能 */
+#undoBtn { margin-left: 12px; padding: 4px 12px; border: 1px solid var(--border); background: var(--bg-white); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 13px; }
+#undoBtn:hover:not(:disabled) { background: var(--bg-light); }
+#undoBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.toast-undo { animation: toast-in 0.3s ease; display: flex; align-items: center; gap: 14px; }
+.toast-undo-msg { flex: 1; }
+.toast-undo-btn { background: transparent; border: 1px solid rgba(255,255,255,0.85); color: #fff; border-radius: 4px; padding: 3px 14px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.toast-undo-btn:hover { background: rgba(255,255,255,0.22); }
 </style>
 </head>
 <body>
@@ -267,6 +276,7 @@ tr:hover { background: var(--bg-light); }
 <div class="app-header">
   <h1>项目任务与临时事项管理</h1>
   <span id="dataStatus" class="data-status-inline"></span>
+  <button id="undoBtn" class="btn btn-outline" onclick="undoLastAction()" disabled title="撤回上一步操作（所有写操作均可撤回）">↩ 撤回</button>
 </div>
 
 <div class="tab-bar">
@@ -476,6 +486,15 @@ function loadData() {
 }
 
 function saveData(data) {
+  // 撤销快照：记录操作前状态（所有经 saveData 的写操作均可撤回）
+  try {
+    const prevRaw = localStorage.getItem(STORAGE_KEY);
+    if (prevRaw) {
+      undoStack.push({ time: Date.now(), data: JSON.parse(prevRaw) });
+      if (undoStack.length > 30) undoStack.shift();
+      updateUndoButton();
+    }
+  } catch (e) {}
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   updateDataStatus();
 }
@@ -501,6 +520,47 @@ function showToast(msg, type) {
   el.textContent = msg;
   container.appendChild(el);
   setTimeout(function() { el.remove(); }, 3000);
+}
+
+// ===== 撤回功能（所有写操作均可撤回）=====
+// 每次 saveData 会自动把"操作前状态"压入 undoStack（见 saveData）。
+let undoStack = [];
+function undoLastAction() {
+  if (!undoStack.length) { showToast('没有可撤回的操作', 'info'); return; }
+  const snap = undoStack.pop();
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snap.data)); } catch (e) {}
+  updateDataStatus();
+  updateUndoButton();
+  try { renderTasks(); } catch (e) {}
+  try { renderTempItems(); } catch (e) {}
+  try { renderDeliveryItems(); } catch (e) {}
+  showToast('已撤回上一步操作');
+}
+function updateUndoButton() {
+  const btn = document.getElementById('undoBtn');
+  if (!btn) return;
+  if (undoStack.length > 0) {
+    btn.disabled = false;
+    btn.textContent = '↩ 撤回 (' + undoStack.length + ')';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '↩ 撤回';
+  }
+}
+function showUndoToast(msg) {
+  const container = document.getElementById('toastContainer');
+  if (!container) { showToast(msg); return; }
+  const el = document.createElement('div');
+  el.className = 'toast toast-success toast-undo';
+  el.innerHTML = '<span class="toast-undo-msg"></span>' +
+    '<button type="button" class="toast-undo-btn" onclick="undoLastAction()">撤回</button>';
+  el.querySelector('.toast-undo-msg').textContent = msg;
+  container.appendChild(el);
+  const timer = setTimeout(function() { if (el.parentNode) el.remove(); }, 8000);
+  el.querySelector('.toast-undo-btn').addEventListener('click', function() {
+    clearTimeout(timer);
+    if (el.parentNode) el.remove();
+  });
 }
 
 function copyTempItemId(id) {
@@ -1406,7 +1466,7 @@ function deleteTask(id) {
     item.processAffectedTaskIds = (item.processAffectedTaskIds || []).filter(tid => tid !== id);
   });
   saveData(data);
-  showToast("任务已删除");
+  showUndoToast("任务已删除");
   renderTasks();
 }
 
@@ -2324,7 +2384,7 @@ function deleteAdjustRecord(taskId, recordId) {
   recalcTaskEndDate(task);
   saveData(data);
   closeModal();
-  showToast('计划调整已删除');
+  showUndoToast('计划调整已删除');
   renderTasks();
 }
 
@@ -2345,7 +2405,7 @@ function deleteTempItem(id) {
   }
   data.tempItems = data.tempItems.filter(t => t.id !== id);
   saveData(data);
-  showToast("临时事项已删除");
+  showUndoToast("临时事项已删除");
   renderTempItems();
 }
 
@@ -2744,7 +2804,7 @@ function deleteDeliveryItem(id) {
   }
   data.deliveryItems = data.deliveryItems.filter(t => t.id !== id);
   saveData(data);
-  showToast("交付件更新已删除");
+  showUndoToast("交付件更新已删除");
   renderDeliveryItems();
 }
 
