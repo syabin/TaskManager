@@ -342,6 +342,7 @@ tr:hover { background: var(--bg-light); }
         </select>
       </div>
       <div style="display:flex; gap:8px; margin-left:auto;">
+        <button class="btn btn-primary" onclick="showTempForm(null, true)" style="background:#e8590c; border-color:#e8590c;">+ 新建预期事件</button>
         <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
         <button class="btn btn-primary" onclick="showDeliveryForm()">+ 新建交付件更新</button>
       </div>
@@ -1784,10 +1785,11 @@ function editTempItemFromDelay(tempItemId, taskId) {
 var _pendingFiles = [];
 
 // ====== Temp Item Management ======
-function showTempForm(tempId) {
+function showTempForm(tempId, forcePlanned) {
   const data = loadData();
   const item = tempId ? data.tempItems.find(t => t.id === tempId) : null;
-  const title = item ? '编辑临时事项' : '新建临时事项';
+  const isExpected = !!forcePlanned || !!(item && item.status === 'planned');
+  const title = item ? (isExpected ? '编辑预期事件' : '编辑临时事项') : (isExpected ? '新建预期事件' : '新建临时事项');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
   const taskCheckboxes = incompleteTasks.map(t =>
@@ -1829,19 +1831,21 @@ function showTempForm(tempId) {
       <h3>${title}</h3>
       <button class="modal-close" onclick="closeTempForm()">&times;</button>
     </div>
-    <div class="form-row">
+    ${isExpected
+      ? '<input type="hidden" id="mTempStatus" value="planned">'
+      : `<div class="form-row">
       <div class="form-group">
         <label>类型</label>
         <select id="mTempStatus" onchange="toggleTempPlannedMode()">
-          <option value="done" ${item && item.status === 'planned' ? '' : 'selected'}>临时事项（已发生）</option>
-          <option value="planned" ${item && item.status === 'planned' ? 'selected' : ''}>预期事件（先记着，实操后补时间）</option>
+          <option value="done" selected>临时事项（已发生）</option>
+          <option value="planned">预期事件（先记着，实操后补时间）</option>
         </select>
       </div>
-    </div>
+    </div>`}
     <div class="form-row">
       <div class="form-group">
         <label>事项日期 <span id="mTempDateHint" style="font-weight:400; font-size:11px; color:var(--text-muted);"></span></label>
-        <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (item ? '' : nowLocalDT())}">
+        <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>时长</label>
