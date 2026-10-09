@@ -1833,15 +1833,7 @@ function showTempForm(tempId, forcePlanned) {
     </div>
     ${isExpected
       ? '<input type="hidden" id="mTempStatus" value="planned">'
-      : `<div class="form-row">
-      <div class="form-group">
-        <label>类型</label>
-        <select id="mTempStatus" onchange="toggleTempPlannedMode()">
-          <option value="done" selected>临时事项（已发生）</option>
-          <option value="planned">预期事件（先记着，实操后补时间）</option>
-        </select>
-      </div>
-    </div>`}
+      : '<input type="hidden" id="mTempStatus" value="done">'}
     ${(!isExpected || item) ? `
     <div class="form-row">
       <div class="form-group">
