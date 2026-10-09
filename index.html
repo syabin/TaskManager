@@ -139,6 +139,7 @@ tr:hover { background: var(--bg-light); }
 .type-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .tag-temp { background: #e8f0fe; color: #1a73e8; }
 .tag-delivery { background: #e6f4ea; color: #137333; }
+.tag-expected { background: #ff8c00; color: #ffffff; }
 .expand-link { display: inline-block; color: var(--primary); font-size: 12px; cursor: pointer; margin-left: 4px; user-select: none; }
 .expand-link:hover { text-decoration: underline; }
 .affected-hidden { }
@@ -335,6 +336,7 @@ tr:hover { background: var(--bg-light); }
       <div class="form-group" style="min-width:90px; flex:0; margin-bottom:0;">
         <select id="delayTypeFilter" onchange="setDelayCurrentPage(1); renderDelayItems()" style="width:110px;" title="类型筛选">
           <option value="all">全部类型</option>
+          <option value="expected">预期事件</option>
           <option value="temp">临时事项</option>
           <option value="delivery">交付件更新</option>
         </select>
@@ -481,6 +483,8 @@ function loadData() {
       if (!d.processAffectedTaskIds) d.processAffectedTaskIds = [];
       if (!d.processStartDate) d.processStartDate = d.deliveryDate || d.date;
     });
+    // tempItems status normalization: 'planned' = 预期事件（先记后补时间），'done' = 已发生
+    data.tempItems.forEach(t => { if (!t.status) t.status = 'done'; });
     return data;
   } catch { return { tasks: [], tempItems: [], deliveryItems: [], holidays: [] }; }
 }
@@ -1827,8 +1831,17 @@ function showTempForm(tempId) {
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>事项日期</label>
-        <input type="datetime-local" id="mTempDate" value="${item ? toDT(item.date) : nowLocalDT()}">
+        <label>类型</label>
+        <select id="mTempStatus" onchange="toggleTempPlannedMode()">
+          <option value="done" ${item && item.status === 'planned' ? '' : 'selected'}>临时事项（已发生）</option>
+          <option value="planned" ${item && item.status === 'planned' ? 'selected' : ''}>预期事件（先记着，实操后补时间）</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>事项日期 <span id="mTempDateHint" style="font-weight:400; font-size:11px; color:var(--text-muted);"></span></label>
+        <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (item ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>时长</label>
@@ -1871,6 +1884,7 @@ function showTempForm(tempId) {
     </div>
   `;
   openModal(html);
+  toggleTempPlannedMode();
 
   // Setup drag-drop after modal is rendered
   if (hasArchivePath()) {
@@ -1975,13 +1989,33 @@ function toggleTempTaskSelect() {
   document.getElementById('mTempTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
 }
 
+// 预期事件模式切换：提示可留空，按钮文案随类型变化
+function toggleTempPlannedMode() {
+  var sel = document.getElementById('mTempStatus');
+  if (!sel) return;
+  var planned = sel.value === 'planned';
+  var hint = document.getElementById('mTempDateHint');
+  if (hint) hint.textContent = planned ? '（预期事件：日期与工时可留空，实操后补填即自动生效）' : '';
+  var btn = document.querySelector('#modalOverlay .btn-primary');
+  if (btn) btn.textContent = planned ? '保存' : '保存并应用延期';
+}
+
 async function saveTempItem(tempId) {
 try {
+  const statusSel = document.getElementById('mTempStatus');
+  let status = statusSel ? statusSel.value : 'done';
   const date = document.getElementById('mTempDate').value;
   const durationValue = parseFloat(document.getElementById('mTempDuration').value) || 0;
   const durationUnit = document.getElementById('mTempDurationUnit').value;
   const description = document.getElementById('mTempDesc').value.trim();
   const impactType = document.getElementById('mTempImpactType').value;
+
+  // 预期事件填了日期与工时 → 自动转正为已发生并应用延期
+  let autoPromoted = false;
+  if (status === 'planned' && date && durationValue > 0) {
+    status = 'done';
+    autoPromoted = true;
+  }
 
   // 时长即延期时长，自动转换
   const delayHours = durationUnit === 'd' ? durationValue * 8 : durationValue;
@@ -2001,7 +2035,9 @@ try {
     const oldItem = data.tempItems.find(t => t.id === tempId);
     if (oldItem) {
       const removedTaskIds = oldItem.affectedTaskIds.filter(tid => !affectedTaskIds.includes(tid));
-      removedTaskIds.forEach(tid => {
+      // 转为预期事件时，清除该事项已生成的全部延期记录
+      const clearTargets = status === 'planned' ? oldItem.affectedTaskIds.slice() : removedTaskIds;
+      clearTargets.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
         if (task) {
           task.delayRecords = task.delayRecords.filter(r => r.causedByTempItemId !== tempId);
@@ -2009,7 +2045,7 @@ try {
         }
       });
 
-      affectedTaskIds.forEach(tid => {
+      if (status === 'done') affectedTaskIds.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
         if (task) {
           let existingRecord = task.delayRecords.find(r => r.causedByTempItemId === tempId);
@@ -2032,6 +2068,7 @@ try {
         }
       });
 
+      oldItem.status = status;
       oldItem.date = date;
       oldItem.durationValue = durationValue;
       oldItem.durationUnit = durationUnit;
@@ -2053,6 +2090,7 @@ try {
     const nowIso = new Date().toISOString();
     var newItem = {
       id: newId,
+      status,
       date,
       durationValue,
       durationUnit,
@@ -2072,27 +2110,29 @@ try {
       }
     }
 
-    affectedTaskIds.forEach(tid => {
-      const task = data.tasks.find(t => t.id === tid);
-      if (task) {
-        task.delayRecords.push({
-          id: genId(),
-          date,
-          delayHours,
-          newEndDate: '',
-          causedByTempItemId: newId,
-          reason: description,
-          createdAt: nowIso
-        });
-        recalcTaskEndDate(task);
-      }
-    });
+    if (status === 'done') {
+      affectedTaskIds.forEach(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        if (task) {
+          task.delayRecords.push({
+            id: genId(),
+            date,
+            delayHours,
+            newEndDate: '',
+            causedByTempItemId: newId,
+            reason: description,
+            createdAt: nowIso
+          });
+          recalcTaskEndDate(task);
+        }
+      });
+    }
   }
 
   saveData(data);
   _pendingFiles = [];
   closeModal();
-  showToast("临时事项已保存");
+  showToast(status === 'planned' ? '预期事件已保存（实操后补填时间即自动生效）' : (autoPromoted ? '已转为临时事项并应用延期' : '临时事项已保存'));
   renderTempItems();
   renderTasks();
 
@@ -3005,8 +3045,9 @@ function renderDelayItems() {
   data.tempItems.forEach(t => combined.push(Object.assign({}, t, { _src: 'temp' })));
   data.deliveryItems.forEach(d => combined.push(Object.assign({}, d, { _src: 'delivery' })));
 
-  // Type filter
-  if (typeFilter === 'temp') combined = combined.filter(x => x._src === 'temp');
+  // Type filter ('temp' = 已发生临时事项; 'expected' = 预期事件)
+  if (typeFilter === 'temp') combined = combined.filter(x => x._src === 'temp' && x.status !== 'planned');
+  else if (typeFilter === 'expected') combined = combined.filter(x => x._src === 'temp' && x.status === 'planned');
   else if (typeFilter === 'delivery') combined = combined.filter(x => x._src === 'delivery');
 
   // Search filter (description / id / affected task name)
@@ -3035,14 +3076,18 @@ function renderDelayItems() {
     return;
   }
 
-  // Sort by date desc, then createdAt desc
-  combined.sort((a, b) => {
+  // 预期事件置顶（按创建时间倒序），其余按 date desc / createdAt desc
+  const isPlannedItem = x => x._src === 'temp' && x.status === 'planned';
+  const plannedItems = combined.filter(isPlannedItem).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const normalItems = combined.filter(x => !isPlannedItem(x));
+  normalItems.sort((a, b) => {
     const dc = b.date.localeCompare(a.date);
     if (dc !== 0) return dc;
     const ca = a.createdAt || '';
     const cb = b.createdAt || '';
     return cb.localeCompare(ca);
   });
+  combined = plannedItems.concat(normalItems);
 
   const pageSize = getDelayPageSize();
   let currentPage = getDelayCurrentPage();
@@ -3064,8 +3109,9 @@ function renderDelayItems() {
   let html = '<table><thead><tr><th>类型</th><th>日期</th><th>记录ID</th><th>时长/处理</th><th>说明</th><th style="width:130px;">导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   pageItems.forEach(item => {
     const isDelivery = item._src === 'delivery';
-    const typeLabel = isDelivery ? '交付件更新' : '临时事项';
-    const typeClass = isDelivery ? 'tag-delivery' : 'tag-temp';
+    const plannedItem = !isDelivery && item.status === 'planned';
+    const typeLabel = isDelivery ? '交付件更新' : (plannedItem ? '预期事件' : '临时事项');
+    const typeClass = isDelivery ? 'tag-delivery' : (plannedItem ? 'tag-expected' : 'tag-temp');
 
     function makeChips(taskIds) {
       return (taskIds || []).map(tid => {
@@ -3118,6 +3164,9 @@ function renderDelayItems() {
       } else {
         delayDisplay = `${processWorkdays} 工作日`;
       }
+    } else if (plannedItem) {
+      durationDisplay = '<span style="color:var(--text-muted);">待定</span>';
+      delayDisplay = '<span style="color:var(--text-muted);">实操后填写</span>';
     } else {
       const dDisp = item.durationUnit === 'd' ? `${item.durationValue}天` : `${item.durationValue}h`;
       const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
@@ -3185,7 +3234,7 @@ function showTempItemDetail(tempId) {
     return task ? `<li>[${task.projectName}] ${task.taskName} — 当前完成时间: ${task.currentEndDate}</li>` : '';
   }).join('');
 
-  const durationDisplay = item.durationUnit === 'd' ? `${item.durationValue} 天` : `${item.durationValue} 小时`;
+  const durationDisplay = item.status === 'planned' ? '待定（实操后填写）' : (item.durationUnit === 'd' ? `${item.durationValue} 天` : `${item.durationValue} 小时`);
   const itemDelayHours = item.durationUnit === 'd' ? item.durationValue * 8 : item.durationValue;
   const delayWorkdays = hoursToWorkingDaysOffset(itemDelayHours);
   const delayDisplay = `${itemDelayHours} 小时 → 延期 ${delayWorkdays} 工作日`;
