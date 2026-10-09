@@ -1842,6 +1842,7 @@ function showTempForm(tempId, forcePlanned) {
         </select>
       </div>
     </div>`}
+    ${(!isExpected || item) ? `
     <div class="form-row">
       <div class="form-group">
         <label>事项日期 <span id="mTempDateHint" style="font-weight:400; font-size:11px; color:var(--text-muted);"></span></label>
@@ -1857,7 +1858,7 @@ function showTempForm(tempId, forcePlanned) {
           </select>
         </div>
       </div>
-    </div>
+    </div>` : ''}
     <div class="form-row">
       <div class="form-group">
         <label>事项描述</label>
@@ -2008,9 +2009,13 @@ async function saveTempItem(tempId) {
 try {
   const statusSel = document.getElementById('mTempStatus');
   let status = statusSel ? statusSel.value : 'done';
-  const date = document.getElementById('mTempDate').value;
-  const durationValue = parseFloat(document.getElementById('mTempDuration').value) || 0;
-  const durationUnit = document.getElementById('mTempDurationUnit').value;
+  // 新建预期事件不渲染日期/工时栏，取值需容错
+  const dateEl = document.getElementById('mTempDate');
+  const date = dateEl ? dateEl.value : '';
+  const durEl = document.getElementById('mTempDuration');
+  const durationValue = durEl ? (parseFloat(durEl.value) || 0) : 0;
+  const unitEl = document.getElementById('mTempDurationUnit');
+  const durationUnit = unitEl ? unitEl.value : 'h';
   const description = document.getElementById('mTempDesc').value.trim();
   const impactType = document.getElementById('mTempImpactType').value;
 
