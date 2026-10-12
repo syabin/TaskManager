@@ -276,6 +276,21 @@ tr:hover { background: var(--bg-light); }
 .dt-input .dt-seg { border: none; background: transparent; padding: 0; width: 32px; text-align: center; font-size: 14px; color: var(--text); outline: none; font-family: inherit; }
 .dt-input .dt-seg-year { width: 52px; }
 .dt-input .dt-sep { color: var(--text-secondary); padding: 0 1px; }
+.dt-cal-btn { border: none; background: transparent; cursor: pointer; font-size: 15px; padding: 0 2px; margin-left: 2px; }
+.dt-picker-panel { position: absolute; top: 100%; left: 0; margin-top: 4px; background: var(--bg-white); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); padding: 10px 12px; z-index: 3000; width: 252px; user-select: none; }
+.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dp-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.dp-nav { border: none; background: transparent; cursor: pointer; font-size: 16px; color: var(--text-secondary); padding: 2px 8px; }
+.dp-nav:hover { color: var(--primary); }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 32px); gap: 2px; }
+.dp-wd { font-size: 11px; color: var(--text-muted); text-align: center; padding: 4px 0; }
+.dp-cell { font-size: 13px; text-align: center; padding: 6px 0; border-radius: 6px; cursor: pointer; color: var(--text); }
+.dp-cell:hover { background: var(--bg-primary-light); }
+.dp-muted { color: var(--text-muted); }
+.dp-today-mark { border: 1px solid var(--primary); }
+.dp-selected { background: var(--primary); color: #fff; }
+.dp-foot { display: flex; justify-content: space-between; margin-top: 6px; }
+.dp-clear, .dp-today { border: none; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; padding: 2px 4px; }
 </style>
 </head>
 <body>
@@ -1855,6 +1870,7 @@ function showTempForm(tempId, forcePlanned) {
           <input class="dt-seg" data-seg="hour" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
           <span class="dt-sep">:</span>
           <input class="dt-seg" data-seg="minute" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
+          <button type="button" class="dt-cal-btn" onclick="toggleDatePicker(event)" title="选择日期">📅</button>
         </div>
         <input type="hidden" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
@@ -2073,6 +2089,107 @@ function initDateTimeSegments() {
   });
   compose();
 }
+
+// ===== 日历弹层：为分段日期输入提供可视化选日期（周一起始） =====
+let _dpYear, _dpMonth;
+function toggleDatePicker(e) {
+  if (e) e.stopPropagation();
+  const old = document.getElementById('datePickerPanel');
+  if (old) { old.remove(); return; }
+  const wrap = document.getElementById('dtSegWrap');
+  if (!wrap) return;
+  const getSeg = function(k) { const s = wrap.querySelector('.dt-seg[data-seg="' + k + '"]'); return s ? s.value : ''; };
+  const now = new Date();
+  _dpYear = parseInt(getSeg('year'), 10) || now.getFullYear();
+  _dpMonth = parseInt(getSeg('month'), 10) || (now.getMonth() + 1);
+  renderDatePickerPanel(wrap);
+}
+function renderDatePickerPanel(wrap) {
+  closeDatePicker();
+  const panel = document.createElement('div');
+  panel.id = 'datePickerPanel';
+  panel.className = 'dt-picker-panel';
+  panel.innerHTML = '<div class="dp-head">' +
+    '<button type="button" class="dp-nav" onclick="dpNavMonth(-1)">‹</button>' +
+    '<span class="dp-title">' + _dpYear + '年' + _dpMonth + '月</span>' +
+    '<button type="button" class="dp-nav" onclick="dpNavMonth(1)">›</button>' +
+    '</div>' +
+    '<div class="dp-grid">' +
+    ['一', '二', '三', '四', '五', '六', '日'].map(function(w) { return '<span class="dp-wd">' + w + '</span>'; }).join('') +
+    dpGridHtml() +
+    '</div>' +
+    '<div class="dp-foot"><button type="button" class="dp-clear" onclick="dpClearDate()">清除</button><button type="button" class="dp-today" onclick="dpPickToday()">今天</button></div>';
+  panel.addEventListener('click', function(e) { e.stopPropagation(); });
+  wrap.parentNode.appendChild(panel);
+}
+function dpGridHtml() {
+  const offset = (new Date(_dpYear, _dpMonth - 1, 1).getDay() + 6) % 7;
+  const prevDays = new Date(_dpYear, _dpMonth - 1, 0).getDate();
+  const curDays = new Date(_dpYear, _dpMonth, 0).getDate();
+  const today = new Date();
+  const sel = getSelectedDateStr();
+  let cells = '';
+  for (let i = offset - 1; i >= 0; i--) cells += '<span class="dp-cell dp-muted">' + (prevDays - i) + '</span>';
+  for (let d = 1; d <= curDays; d++) {
+    const ds = _dpYear + '-' + _dtPad(String(_dpMonth), 2) + '-' + _dtPad(String(d), 2);
+    let cls = 'dp-cell';
+    if (_dpYear === today.getFullYear() && _dpMonth === today.getMonth() + 1 && d === today.getDate()) cls += ' dp-today-mark';
+    if (ds === sel) cls += ' dp-selected';
+    cells += '<span class="' + cls + '" onclick="dpPick(' + _dpYear + ',' + _dpMonth + ',' + d + ')">' + d + '</span>';
+  }
+  const rest = (7 - (offset + curDays) % 7) % 7;
+  for (let i = 1; i <= rest; i++) cells += '<span class="dp-cell dp-muted">' + i + '</span>';
+  return cells;
+}
+function getSelectedDateStr() {
+  const wrap = document.getElementById('dtSegWrap');
+  if (!wrap) return '';
+  const getSeg = function(k) { const s = wrap.querySelector('.dt-seg[data-seg="' + k + '"]'); return s ? s.value : ''; };
+  const y = getSeg('year'), mo = getSeg('month'), d = getSeg('day');
+  if (!y || !mo || !d) return '';
+  return _dtPad(y, 4) + '-' + _dtPad(mo, 2) + '-' + _dtPad(d, 2);
+}
+function dpNavMonth(delta) {
+  _dpMonth += delta;
+  if (_dpMonth > 12) { _dpMonth = 1; _dpYear++; }
+  if (_dpMonth < 1) { _dpMonth = 12; _dpYear--; }
+  const wrap = document.getElementById('dtSegWrap');
+  if (wrap) renderDatePickerPanel(wrap);
+}
+function dpPick(y, m, d) {
+  const wrap = document.getElementById('dtSegWrap');
+  if (!wrap) return;
+  const setSeg = function(k, v) { const s = wrap.querySelector('.dt-seg[data-seg="' + k + '"]'); if (s) s.value = v; };
+  setSeg('year', String(y));
+  setSeg('month', _dtPad(String(m), 2));
+  setSeg('day', _dtPad(String(d), 2));
+  const first = wrap.querySelector('.dt-seg');
+  if (first) first.dispatchEvent(new Event('input'));
+  closeDatePicker();
+}
+function dpPickToday() {
+  const now = new Date();
+  dpPick(now.getFullYear(), now.getMonth() + 1, now.getDate());
+}
+function dpClearDate() {
+  const wrap = document.getElementById('dtSegWrap');
+  if (!wrap) return;
+  ['year', 'month', 'day', 'hour', 'minute'].forEach(function(k) {
+    const s = wrap.querySelector('.dt-seg[data-seg="' + k + '"]');
+    if (s) s.value = '';
+  });
+  const first = wrap.querySelector('.dt-seg');
+  if (first) first.dispatchEvent(new Event('input'));
+  closeDatePicker();
+}
+function closeDatePicker() { const p = document.getElementById('datePickerPanel'); if (p) p.remove(); }
+document.addEventListener('click', function(e) {
+  const panel = document.getElementById('datePickerPanel');
+  if (!panel) return;
+  if (panel.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('.dt-cal-btn')) return;
+  panel.remove();
+});
 
 async function saveTempItem(tempId) {
 try {
