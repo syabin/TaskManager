@@ -1863,19 +1863,7 @@ function showTempForm(tempId, forcePlanned) {
     <div class="form-row">
       <div class="form-group">
         <label>事项日期</label>
-        <div id="dtSegWrap" class="dt-input">
-          <input class="dt-seg dt-seg-year" data-seg="year" data-max="4" maxlength="4" inputmode="numeric" placeholder="2026" autocomplete="off">
-          <span class="dt-sep">/</span>
-          <input class="dt-seg" data-seg="month" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
-          <span class="dt-sep">/</span>
-          <input class="dt-seg" data-seg="day" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
-          <span class="dt-sep" style="padding:0 6px;">&nbsp;</span>
-          <input class="dt-seg" data-seg="hour" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
-          <span class="dt-sep">:</span>
-          <input class="dt-seg" data-seg="minute" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
-          <button type="button" class="dt-cal-btn" onclick="toggleDatePicker(event)" title="选择日期">📅</button>
-        </div>
-        <input type="hidden" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
+        <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>时长</label>
