@@ -359,12 +359,14 @@ tr:hover { background: var(--bg-light); }
         <select id="delayTypeFilter" onchange="setDelayCurrentPage(1); renderDelayItems()" style="width:110px;" title="类型筛选">
           <option value="all">全部类型</option>
           <option value="expected">预期事件</option>
+          <option value="deliveryExpected">预期交付件</option>
           <option value="temp">临时事项</option>
           <option value="delivery">交付件更新</option>
         </select>
       </div>
       <div style="display:flex; gap:8px; margin-left:auto;">
         <button class="btn btn-primary" onclick="showTempForm(null, true)" style="background:#e8590c; border-color:#e8590c;">+ 新建预期事件</button>
+        <button class="btn btn-primary" onclick="showDeliveryForm(null, true)" style="background:#e8590c; border-color:#e8590c;">+ 新建预期交付件</button>
         <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
         <button class="btn btn-primary" onclick="showDeliveryForm()">+ 新建交付件更新</button>
       </div>
@@ -505,6 +507,7 @@ function loadData() {
       if (!d.processImpactType) d.processImpactType = 'none';
       if (!d.processAffectedTaskIds) d.processAffectedTaskIds = [];
       if (!d.processStartDate) d.processStartDate = d.deliveryDate || d.date;
+      if (!d.status) d.status = 'done';
     });
     // tempItems status normalization: 'planned' = 预期事件（先记后补时间），'done' = 已发生
     data.tempItems.forEach(t => { if (!t.status) t.status = 'done'; });
@@ -2710,10 +2713,11 @@ function editDeliveryItemFromDelay(deliveryItemId, taskId) {
   showDeliveryForm(deliveryItemId);
 }
 
-function showDeliveryForm(deliveryId) {
+function showDeliveryForm(deliveryId, forcePlanned) {
   const data = loadData();
   const item = deliveryId ? data.deliveryItems.find(t => t.id === deliveryId) : null;
-  const title = item ? '编辑交付件更新' : '新建交付件更新';
+  const isExpected = !!forcePlanned || !!(item && item.status === 'planned');
+  const title = item ? (isExpected ? '编辑预期交付件' : '编辑交付件更新') : (isExpected ? '新建预期交付件' : '新建交付件更新');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
   const blockCheckboxes = incompleteTasks.map(t =>
@@ -2757,14 +2761,18 @@ function showDeliveryForm(deliveryId) {
       <h3>${title}</h3>
       <button class="modal-close" onclick="closeDeliveryForm()">&times;</button>
     </div>
+    ${isExpected
+      ? '<input type="hidden" id="mDeliveryStatus" value="planned">'
+      : '<input type="hidden" id="mDeliveryStatus" value="done">'}
+    ${(!isExpected || item) ? `
     <div class="form-row">
       <div class="form-group">
         <label>交付件更新日期</label>
-        <input type="datetime-local" id="mDeliveryDate" value="${item ? toDT(item.date) : nowLocalDT()}">
+        <input type="datetime-local" id="mDeliveryDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>开始处理日期</label>
-        <input type="datetime-local" id="mDeliveryProcessStartDate" value="${item ? toDT(item.processStartDate || item.deliveryDate || item.date) : nowLocalDT()}">
+        <input type="datetime-local" id="mDeliveryProcessStartDate" value="${item && (item.processStartDate || item.deliveryDate || item.date) ? toDT(item.processStartDate || item.deliveryDate || item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>处理时长</label>
@@ -2776,7 +2784,7 @@ function showDeliveryForm(deliveryId) {
           </select>
         </div>
       </div>
-    </div>
+    </div>` : ''}
     <div class="form-row">
       <div class="form-group">
         <label>交付件说明</label>
@@ -2874,10 +2882,25 @@ function collectDeliveryAffectedTasks(impactType, checkboxClass, data) {
 
 async function saveDeliveryItem(deliveryId) {
 try {
-  const deliveryDate = document.getElementById('mDeliveryDate').value;
-  const processStartDate = document.getElementById('mDeliveryProcessStartDate').value;
-  const processValue = parseFloat(document.getElementById('mDeliveryProcess').value) || 0;
-  const processUnit = document.getElementById('mDeliveryProcessUnit').value;
+  // 预期交付件新建时不渲染日期/工时栏，取值需容错
+  const statusSel = document.getElementById('mDeliveryStatus');
+  let status = statusSel ? statusSel.value : 'done';
+  const dDateEl = document.getElementById('mDeliveryDate');
+  const deliveryDate = dDateEl ? dDateEl.value : '';
+  const psDateEl = document.getElementById('mDeliveryProcessStartDate');
+  const processStartDate = psDateEl ? psDateEl.value : '';
+  const procEl = document.getElementById('mDeliveryProcess');
+  const processValue = procEl ? (parseFloat(procEl.value) || 0) : 0;
+  const unitEl = document.getElementById('mDeliveryProcessUnit');
+  const processUnit = unitEl ? unitEl.value : 'h';
+
+  // 预期交付件补填日期与工时 → 自动转正并应用延期
+  let autoPromoted = false;
+  if (status === 'planned' && deliveryDate && processValue > 0) {
+    status = 'done';
+    autoPromoted = true;
+    if (!processStartDate) processStartDate = deliveryDate;
+  }
   const description = document.getElementById('mDeliveryDesc').value.trim();
   const blockImpactType = document.getElementById('mDeliveryBlockImpactType').value;
   const processImpactType = document.getElementById('mDeliveryProcessImpactType').value;
@@ -2940,13 +2963,24 @@ try {
         ...(oldItem.processAffectedTaskIds || []),
         ...(oldItem.affectedTaskIds || [])
       ]));
-      const tasksToRecalc = Array.from(new Set([...previouslyAffected, ...allAffectedTaskIds]));
+      if (status === 'planned') {
+        // 转为预期：清除该交付件已生成的全部延期记录
+        previouslyAffected.forEach(tid => {
+          const task = data.tasks.find(t => t.id === tid);
+          if (task) {
+            task.delayRecords = task.delayRecords.filter(r => r.causedByDeliveryItemId !== deliveryId);
+            recalcTaskEndDate(task);
+          }
+        });
+      } else {
+        const tasksToRecalc = Array.from(new Set([...previouslyAffected, ...allAffectedTaskIds]));
+        tasksToRecalc.forEach(tid => {
+          const task = data.tasks.find(t => t.id === tid);
+          if (task) applyDeliveryRecordsToTask(task, deliveryId, oldItem.createdAt || new Date().toISOString());
+        });
+      }
 
-      tasksToRecalc.forEach(tid => {
-        const task = data.tasks.find(t => t.id === tid);
-        if (task) applyDeliveryRecordsToTask(task, deliveryId, oldItem.createdAt || new Date().toISOString());
-      });
-
+      oldItem.status = status;
       oldItem.date = deliveryDate;
       oldItem.deliveryDate = deliveryDate;
       oldItem.processStartDate = processStartDate;
@@ -2973,6 +3007,7 @@ try {
     const nowIso = new Date().toISOString();
     var newItem = {
       id: newId,
+      status,
       date: deliveryDate,
       deliveryDate,
       processStartDate,
@@ -2997,16 +3032,18 @@ try {
       }
     }
 
-    allAffectedTaskIds.forEach(tid => {
-      const task = data.tasks.find(t => t.id === tid);
-      if (task) applyDeliveryRecordsToTask(task, newId, nowIso);
-    });
+    if (status === 'done') {
+      allAffectedTaskIds.forEach(tid => {
+        const task = data.tasks.find(t => t.id === tid);
+        if (task) applyDeliveryRecordsToTask(task, newId, nowIso);
+      });
+    }
   }
 
   saveData(data);
   _pendingFiles = [];
   closeModal();
-  showToast("交付件更新已保存");
+  showToast(status === 'planned' ? '预期交付件已保存（实操后补填信息即自动生效）' : (autoPromoted ? '已转为交付件更新并应用延期' : '交付件更新已保存'));
   renderDeliveryItems();
   renderTasks();
 
@@ -3243,7 +3280,8 @@ function renderDelayItems() {
   // Type filter ('temp' = 已发生临时事项; 'expected' = 预期事件)
   if (typeFilter === 'temp') combined = combined.filter(x => x._src === 'temp' && x.status !== 'planned');
   else if (typeFilter === 'expected') combined = combined.filter(x => x._src === 'temp' && x.status === 'planned');
-  else if (typeFilter === 'delivery') combined = combined.filter(x => x._src === 'delivery');
+  else if (typeFilter === 'delivery') combined = combined.filter(x => x._src === 'delivery' && x.status !== 'planned');
+  else if (typeFilter === 'deliveryExpected') combined = combined.filter(x => x._src === 'delivery' && x.status === 'planned');
 
   // Search filter (description / id / affected task name)
   if (searchVal) {
@@ -3272,7 +3310,7 @@ function renderDelayItems() {
   }
 
   // 预期事件置顶（按创建时间倒序），其余按 date desc / createdAt desc
-  const isPlannedItem = x => x._src === 'temp' && x.status === 'planned';
+  const isPlannedItem = x => x.status === 'planned';
   const plannedItems = combined.filter(isPlannedItem).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   const normalItems = combined.filter(x => !isPlannedItem(x));
   normalItems.sort((a, b) => {
@@ -3304,9 +3342,9 @@ function renderDelayItems() {
   let html = '<table><thead><tr><th>类型</th><th>日期</th><th>记录ID</th><th>时长/处理</th><th>说明</th><th style="width:130px;">导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   pageItems.forEach(item => {
     const isDelivery = item._src === 'delivery';
-    const plannedItem = !isDelivery && item.status === 'planned';
-    const typeLabel = isDelivery ? '交付件更新' : (plannedItem ? '预期事件' : '临时事项');
-    const typeClass = isDelivery ? 'tag-delivery' : (plannedItem ? 'tag-expected' : 'tag-temp');
+    const plannedItem = item.status === 'planned';
+    const typeLabel = isDelivery ? (plannedItem ? '预期交付件' : '交付件更新') : (plannedItem ? '预期事件' : '临时事项');
+    const typeClass = plannedItem ? 'tag-expected' : (isDelivery ? 'tag-delivery' : 'tag-temp');
 
     function makeChips(taskIds) {
       return (taskIds || []).map(tid => {
