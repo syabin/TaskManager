@@ -270,10 +270,12 @@ tr:hover { background: var(--bg-light); }
 .toast-undo-btn { background: transparent; border: 1px solid rgba(255,255,255,0.85); color: #fff; border-radius: 4px; padding: 3px 14px; cursor: pointer; font-size: 13px; font-weight: 600; }
 .toast-undo-btn:hover { background: rgba(255,255,255,0.22); }
 
-/* 分段式日期时间输入 */
-.dt-seg { width: 42px; padding: 6px 2px; text-align: center; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; }
-.dt-seg:focus { border-color: var(--primary); }
-.dt-seg-year { width: 58px; }
+/* 分段式日期时间输入（外观与原生输入框一致） */
+.dt-input { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg-white); }
+.dt-input:focus-within { border-color: var(--primary); }
+.dt-input .dt-seg { border: none; background: transparent; padding: 0; width: 32px; text-align: center; font-size: 14px; color: var(--text); outline: none; font-family: inherit; }
+.dt-input .dt-seg-year { width: 52px; }
+.dt-input .dt-sep { color: var(--text-secondary); padding: 0 1px; }
 </style>
 </head>
 <body>
@@ -1843,15 +1845,15 @@ function showTempForm(tempId, forcePlanned) {
     <div class="form-row">
       <div class="form-group">
         <label>事项日期</label>
-        <div id="dtSegWrap" style="display:flex; align-items:center; gap:2px;">
+        <div id="dtSegWrap" class="dt-input">
           <input class="dt-seg dt-seg-year" data-seg="year" data-max="4" maxlength="4" inputmode="numeric" placeholder="2026" autocomplete="off">
-          <span style="color:var(--text-secondary); padding:0 2px;">/</span>
+          <span class="dt-sep">/</span>
           <input class="dt-seg" data-seg="month" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
-          <span style="color:var(--text-secondary); padding:0 2px;">/</span>
+          <span class="dt-sep">/</span>
           <input class="dt-seg" data-seg="day" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
-          <span style="color:var(--text-secondary); padding:0 6px;">&nbsp;</span>
+          <span class="dt-sep" style="padding:0 6px;">&nbsp;</span>
           <input class="dt-seg" data-seg="hour" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
-          <span style="color:var(--text-secondary); padding:0 2px;">:</span>
+          <span class="dt-sep">:</span>
           <input class="dt-seg" data-seg="minute" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
         </div>
         <input type="hidden" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
