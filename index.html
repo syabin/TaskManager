@@ -269,6 +269,11 @@ tr:hover { background: var(--bg-light); }
 .toast-undo-msg { flex: 1; }
 .toast-undo-btn { background: transparent; border: 1px solid rgba(255,255,255,0.85); color: #fff; border-radius: 4px; padding: 3px 14px; cursor: pointer; font-size: 13px; font-weight: 600; }
 .toast-undo-btn:hover { background: rgba(255,255,255,0.22); }
+
+/* 分段式日期时间输入 */
+.dt-seg { width: 42px; padding: 6px 2px; text-align: center; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; }
+.dt-seg:focus { border-color: var(--primary); }
+.dt-seg-year { width: 58px; }
 </style>
 </head>
 <body>
@@ -1837,8 +1842,19 @@ function showTempForm(tempId, forcePlanned) {
     ${(!isExpected || item) ? `
     <div class="form-row">
       <div class="form-group">
-        <label>事项日期 <span id="mTempDateHint" style="font-weight:400; font-size:11px; color:var(--text-muted);"></span></label>
-        <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
+        <label>事项日期</label>
+        <div id="dtSegWrap" style="display:flex; align-items:center; gap:2px;">
+          <input class="dt-seg dt-seg-year" data-seg="year" data-max="4" maxlength="4" inputmode="numeric" placeholder="2026" autocomplete="off">
+          <span style="color:var(--text-secondary); padding:0 2px;">/</span>
+          <input class="dt-seg" data-seg="month" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
+          <span style="color:var(--text-secondary); padding:0 2px;">/</span>
+          <input class="dt-seg" data-seg="day" data-max="2" maxlength="2" inputmode="numeric" placeholder="01" autocomplete="off">
+          <span style="color:var(--text-secondary); padding:0 6px;">&nbsp;</span>
+          <input class="dt-seg" data-seg="hour" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
+          <span style="color:var(--text-secondary); padding:0 2px;">:</span>
+          <input class="dt-seg" data-seg="minute" data-max="2" maxlength="2" inputmode="numeric" placeholder="00" autocomplete="off">
+        </div>
+        <input type="hidden" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
       </div>
       <div class="form-group">
         <label>时长</label>
@@ -1882,6 +1898,7 @@ function showTempForm(tempId, forcePlanned) {
   `;
   openModal(html);
   toggleTempPlannedMode();
+  initDateTimeSegments();
 
   // Setup drag-drop after modal is rendered
   if (hasArchivePath()) {
@@ -1986,15 +2003,73 @@ function toggleTempTaskSelect() {
   document.getElementById('mTempTaskSelectRow').style.display = type === 'specific' ? 'flex' : 'none';
 }
 
-// 预期事件模式切换：提示可留空，按钮文案随类型变化
+// 预期事件模式切换：按钮文案随类型变化
 function toggleTempPlannedMode() {
   var sel = document.getElementById('mTempStatus');
   if (!sel) return;
   var planned = sel.value === 'planned';
-  var hint = document.getElementById('mTempDateHint');
-  if (hint) hint.textContent = planned ? '（预期事件：日期与工时可留空，实操后补填即自动生效）' : '';
   var btn = document.querySelector('#modalOverlay .btn-primary');
   if (btn) btn.textContent = planned ? '保存' : '保存并应用延期';
+}
+
+// ===== 分段式日期时间输入：年份满4位自动跳月，单数字高位自动补零跳段 =====
+function _dtPad(v, n) { v = (v || '').replace(/\D/g, ''); while (v.length < n) v = '0' + v; return v; }
+function initDateTimeSegments() {
+  const wrap = document.getElementById('dtSegWrap');
+  const hidden = document.getElementById('mTempDate');
+  if (!wrap || !hidden) return;
+  const segs = Array.prototype.slice.call(wrap.querySelectorAll('.dt-seg'));
+  // 回填已有值
+  const m = (hidden.value || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{1,2}))?/);
+  if (m) {
+    const map = { year: m[1], month: m[2], day: m[3], hour: m[4] || '', minute: m[5] || '' };
+    segs.forEach(function(s) { s.value = map[s.dataset.seg] || ''; });
+  }
+  function compose() {
+    const get = function(k) {
+      const s = segs.find(function(x) { return x.dataset.seg === k; });
+      return s ? _dtPad(s.value, k === 'year' ? 4 : 2) : '';
+    };
+    const y = get('year'), mo = get('month'), d = get('day');
+    if (y.length < 4 || !mo || !d) { hidden.value = ''; return; }
+    const h = get('hour'), mi = get('minute');
+    hidden.value = h ? (y + '-' + mo + '-' + d + 'T' + h + ':' + mi) : (y + '-' + mo + '-' + d);
+  }
+  segs.forEach(function(seg, idx) {
+    seg.addEventListener('input', function() {
+      let v = seg.value.replace(/\D/g, '');
+      const maxLen = parseInt(seg.dataset.max, 10) || 2;
+      if (v.length > maxLen) v = v.slice(0, maxLen);
+      let jump = v.length >= maxLen;
+      if (!jump && v.length === 1) {
+        const n = parseInt(v, 10);
+        if (seg.dataset.seg === 'month' && n >= 2) jump = true;
+        else if (seg.dataset.seg === 'day' && n >= 4) jump = true;
+        else if (seg.dataset.seg === 'hour' && n >= 3) jump = true;
+        else if (seg.dataset.seg === 'minute' && n >= 6) jump = true;
+      }
+      seg.value = (jump && v.length === 1 && seg.dataset.seg !== 'year') ? ('0' + v) : v;
+      compose();
+      if (jump && idx < segs.length - 1) segs[idx + 1].focus();
+    });
+    seg.addEventListener('blur', function() {
+      if (seg.value && seg.dataset.seg !== 'year') {
+        seg.value = _dtPad(seg.value, parseInt(seg.dataset.max, 10) || 2);
+      }
+      compose();
+    });
+    seg.addEventListener('keydown', function(e) {
+      if (e.key === 'Backspace' && seg.value === '' && idx > 0) {
+        const prev = segs[idx - 1];
+        prev.focus();
+        prev.value = prev.value.slice(0, -1);
+        e.preventDefault();
+        prev.dispatchEvent(new Event('input'));
+      } else if (e.key === 'ArrowLeft' && idx > 0) { segs[idx - 1].focus(); e.preventDefault(); }
+      else if (e.key === 'ArrowRight' && idx < segs.length - 1) { segs[idx + 1].focus(); e.preventDefault(); }
+    });
+  });
+  compose();
 }
 
 async function saveTempItem(tempId) {
