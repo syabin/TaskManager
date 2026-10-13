@@ -88,6 +88,7 @@ tr:hover { background: var(--bg-light); }
 .status-in-progress { background: var(--info-bg); color: var(--info-text); }
 .status-completed { background: var(--success-bg); color: var(--success-text); }
 .status-delayed { background: var(--danger-bg-light); color: var(--danger-text-light); }
+.status-paused { background: var(--warning-bg); color: #856404; }
 
 .delay-link { color: var(--primary); cursor: pointer; text-decoration: underline; }
 .delay-link:hover { color: var(--primary-dark); }
@@ -511,6 +512,8 @@ function loadData() {
     });
     // tempItems status normalization: 'planned' = 预期事件（先记后补时间），'done' = 已发生
     data.tempItems.forEach(t => { if (!t.status) t.status = 'done'; });
+    // tasks pauseRecords normalization: 暂停/启动记录（独立于延期记录，暂停期间不记延期）
+    data.tasks.forEach(t => { if (!t.pauseRecords) t.pauseRecords = []; });
     return data;
   } catch { return { tasks: [], tempItems: [], deliveryItems: [], holidays: [] }; }
 }
@@ -1313,7 +1316,7 @@ function showTaskForm(taskId, projectName, projectTitle) {
       <div class="form-group">
         <label>任务状态</label>
         <select id="mTaskStatus">
-          ${['未开始','进行中','已完成','已延期'].map(s => `<option value="${s}" ${task && task.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+          ${['未开始','进行中','已完成','已延期','暂停'].map(s => `<option value="${s}" ${task && task.status === s ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -1465,6 +1468,7 @@ function saveTask(taskId, projectName) {
       adjustedEndDate: '',
       status,
       delayRecords: [],
+      pauseRecords: [],
       currentEndDate: plannedEndDate
     };
     data.tasks.push(newTask);
@@ -1545,6 +1549,9 @@ function saveCompletion(id) {
     reason: reason,
     createdAt: new Date().toISOString()
   });
+  // 完成任务时自动收尾未结束的暂停记录（启动时间 = 实际完成时间）
+  const openPause = (task.pauseRecords || []).find(r => !r.resumedAt);
+  if (openPause) openPause.resumedAt = completedAt;
   saveData(data);
   if (_pendingDelayModalTaskId === id) {
     closeModal();
@@ -1555,6 +1562,201 @@ function saveCompletion(id) {
   }
   showToast('任务已标记为完成');
   renderTasks();
+}
+
+// ====== 暂停 / 启动 ======
+// 暂停期间：不被「影响所有任务」波及、不记录延期；暂停与启动时间可编辑、可删除（防误操作）
+function pauseTask(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  if (task.status === '暂停') { showToast('该任务已在暂停中', 'error'); return; }
+  if (task.status === '已完成') { showToast('已完成的任务不能暂停', 'error'); return; }
+  openModal(`
+    <div class="modal-header">
+      <h3>暂停任务 - ${task.taskName}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>暂停时间</label>
+        <input type="datetime-local" id="mPauseAt" value="${nowLocalDT()}">
+        <span style="font-size:11px;color:var(--text-muted);">可补录非当下的暂停时间</span>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>暂停原因 / 备注</label>
+        <input type="text" id="mPauseReason" placeholder="选填，如：等待外部反馈、资源被占用">
+      </div>
+    </div>
+    <p style="font-size:12px; color:#856404; background:var(--warning-bg); border-radius:6px; padding:8px 10px;">暂停期间：不受「影响所有任务」的临时事项 / 交付件更新影响，不记录延期；启动后恢复顺延。</p>
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="savePauseRecord('${taskId}')">确认暂停</button>
+    </div>
+  `);
+}
+
+function savePauseRecord(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const pausedAt = document.getElementById('mPauseAt').value || nowLocalDT();
+  const reason = document.getElementById('mPauseReason').value.trim();
+  task.pauseRecords = task.pauseRecords || [];
+  task.pauseRecords.push({
+    id: genId(),
+    pausedAt,
+    resumedAt: null,
+    reason,
+    fromStatus: task.status,
+    createdAt: new Date().toISOString()
+  });
+  task.status = '暂停';
+  saveData(data);
+  closeModal();
+  showToast('任务已暂停（暂停期间不计延期）');
+  renderTasks();
+  if (_pendingDelayModalTaskId === taskId) {
+    var reopenPauseId = _pendingDelayModalTaskId;
+    _pendingDelayModalTaskId = null;
+    setTimeout(function() { showTaskDelays(reopenPauseId); }, 100);
+  }
+}
+
+function resumeTask(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  if (task.status !== '暂停') { showToast('该任务不在暂停中', 'error'); return; }
+  const openRec = (task.pauseRecords || []).find(r => !r.resumedAt);
+  openModal(`
+    <div class="modal-header">
+      <h3>启动任务 - ${task.taskName}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    ${openRec ? `
+    <div class="form-row">
+      <div class="form-group">
+        <label>暂停时间</label>
+        <input type="text" value="${toDT(openRec.pausedAt).replace('T', ' ')}" disabled style="background:#f5f5f5;">
+      </div>
+      <div class="form-group">
+        <label>启动时间</label>
+        <input type="datetime-local" id="mResumeAt" value="${nowLocalDT()}">
+        <span style="font-size:11px;color:var(--text-muted);">可补录非当下的启动时间</span>
+      </div>
+    </div>` : `
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">未找到进行中的暂停记录（可能为手动修改状态所致），将直接恢复为「进行中」。</p>
+    <div class="form-row">
+      <div class="form-group">
+        <label>启动时间</label>
+        <input type="datetime-local" id="mResumeAt" value="${nowLocalDT()}">
+      </div>
+    </div>`}
+    <div style="text-align:right; margin-top:16px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
+      <button class="btn btn-primary" onclick="saveResumeRecord('${taskId}')">确认启动</button>
+    </div>
+  `);
+}
+
+function saveResumeRecord(taskId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const resumedAt = document.getElementById('mResumeAt').value || nowLocalDT();
+  const openRec = (task.pauseRecords || []).find(r => !r.resumedAt);
+  if (openRec) {
+    if (resumedAt < openRec.pausedAt) { showToast('启动时间不能早于暂停时间', 'error'); return; }
+    openRec.resumedAt = resumedAt;
+    task.status = openRec.fromStatus || '进行中';
+  } else {
+    task.status = '进行中';
+  }
+  saveData(data);
+  closeModal();
+  showToast('任务已启动，恢复顺延');
+  renderTasks();
+  if (_pendingDelayModalTaskId === taskId) {
+    var reopenResumeId = _pendingDelayModalTaskId;
+    _pendingDelayModalTaskId = null;
+    setTimeout(function() { showTaskDelays(reopenResumeId); }, 100);
+  }
+}
+
+// 依据暂停记录同步任务状态：有未结束记录 → 暂停；暂停中但无未结束记录 → 恢复为最后一条已结束记录的暂停前状态
+function syncPauseStatus(task) {
+  const recs = task.pauseRecords || [];
+  const open = recs.find(r => !r.resumedAt);
+  if (open) {
+    task.status = '暂停';
+  } else if (task.status === '暂停') {
+    const lastClosed = [...recs].reverse().find(r => r.resumedAt);
+    task.status = (lastClosed && lastClosed.fromStatus) || '进行中';
+  }
+}
+
+function editPauseRecord(taskId, recordId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const rec = (task.pauseRecords || []).find(r => r.id === recordId);
+  if (!rec) return;
+  const isOpen = !rec.resumedAt;
+  openModal(`
+    <div class="modal-header"><h3>${isOpen ? '编辑暂停记录' : '编辑暂停 / 启动记录'}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>暂停时间</label><input type="datetime-local" id="mPauseEditAt" value="${toDT(rec.pausedAt)}"></div>
+      <div class="form-group"><label>启动时间${isOpen ? '（尚未启动）' : ''}</label><input type="datetime-local" id="mPauseEditResumeAt" value="${rec.resumedAt ? toDT(rec.resumedAt) : ''}" ${isOpen ? 'disabled' : ''}></div>
+      <div class="form-group"><label>原因 / 备注</label><input type="text" id="mPauseEditReason" value="${escAttr(rec.reason || '')}" placeholder="选填"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="savePauseRecordEdit('${taskId}','${recordId}')">保存</button>
+    </div>
+  `);
+}
+
+function savePauseRecordEdit(taskId, recordId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const rec = (task.pauseRecords || []).find(r => r.id === recordId);
+  if (!rec) return;
+  const pausedAt = document.getElementById('mPauseEditAt').value || rec.pausedAt;
+  const resumeEl = document.getElementById('mPauseEditResumeAt');
+  const reason = document.getElementById('mPauseEditReason').value.trim();
+  let resumedAt = rec.resumedAt;
+  if (resumeEl && !resumeEl.disabled) resumedAt = resumeEl.value || '';
+  if (resumedAt && resumedAt < pausedAt) { showToast('启动时间不能早于暂停时间', 'error'); return; }
+  rec.pausedAt = pausedAt;
+  rec.resumedAt = resumedAt || null;
+  rec.reason = reason;
+  rec.updatedAt = nowLocalDT();
+  syncPauseStatus(task);
+  saveData(data);
+  closeModal();
+  showToast('暂停记录已更新');
+  renderTasks();
+  showTaskDelays(taskId);
+}
+
+function deletePauseRecord(taskId, recordId) {
+  if (!confirm('确定删除此暂停记录？')) return;
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  task.pauseRecords = (task.pauseRecords || []).filter(r => r.id !== recordId);
+  syncPauseStatus(task);
+  saveData(data);
+  closeModal();
+  showUndoToast('暂停记录已删除');
+  renderTasks();
+  if (_pendingDelayModalTaskId === taskId) {
+    setTimeout(function() { showTaskDelays(taskId); }, 100);
+  }
 }
 
 function getUniqueProjectsFromData(data) {
@@ -1576,7 +1778,7 @@ function renderTasks() {
   const selectedProjects = getDropdownValues('filterProject');
 
   // Initialize/update status dropdown filter (restore saved state)
-  const statuses = ['未开始', '进行中', '已完成', '已延期'];
+  const statuses = ['未开始', '进行中', '已完成', '已延期', '暂停'];
   const savedStatuses = loadFilterState(FILTER_STATUS_KEY, []);
   const statusValues = savedStatuses.filter(s => statuses.includes(s));
   initDropdown('filterStatus', statuses, statusValues);
@@ -1599,10 +1801,12 @@ function renderTasks() {
   const completed = data.tasks.filter(t => t.status === '已完成').length;
   const delayed = data.tasks.filter(t => t.status === '已延期').length;
   const inProgress = data.tasks.filter(t => t.status === '进行中').length;
+  const paused = data.tasks.filter(t => t.status === '暂停').length;
   document.getElementById('taskStats').innerHTML = `
     <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">总任务数</div></div>
     <div class="stat-card"><div class="stat-value">${inProgress}</div><div class="stat-label">进行中</div></div>
     <div class="stat-card"><div class="stat-value">${delayed}</div><div class="stat-label">已延期</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:#856404;">${paused}</div><div class="stat-label">已暂停</div></div>
     <div class="stat-card"><div class="stat-value">${completed}</div><div class="stat-label">已完成</div></div>
   `;
 
@@ -1646,6 +1850,8 @@ function renderTasks() {
     projTasks.forEach(t => {
       const delayCount = t.delayRecords.filter(r => r.type !== 'status' && r.type !== 'complete').length;
       const statusCount = t.delayRecords.filter(r => r.type === 'status' || r.type === 'complete').length;
+      const pauseCount = (t.pauseRecords || []).length;
+      const delayLabel = delayCount > 0 ? delayCount + ' 次延期' : (statusCount > 0 ? statusCount + ' 次变更' : (pauseCount > 0 ? pauseCount + ' 次暂停' : ''));
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
       html += `<tr>
         <td>${t.projectName}</td>
@@ -1655,10 +1861,13 @@ function renderTasks() {
         <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
         <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
         <td class="date-cell" style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
-        <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
-        <td>${t.delayRecords.length > 0 ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayCount > 0 ? delayCount + ' 次延期' : statusCount + ' 次变更'}</span>` : '-'}</td>
+        <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : t.status === '暂停' ? 'paused' : 'delayed'}">${t.status}</span></td>
+        <td>${(t.delayRecords.length > 0 || pauseCount > 0) ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayLabel}</span>` : '-'}</td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="showTaskForm('${t.id}')">编辑</button>
+          ${t.status === '暂停'
+            ? `<button class="btn btn-outline btn-sm" onclick="resumeTask('${t.id}')" style="color:#856404;" title="启动任务，恢复顺延">▶ 启动</button>`
+            : (t.status === '已完成' ? '' : `<button class="btn btn-outline btn-sm" onclick="pauseTask('${t.id}')" title="暂停任务：期间不计延期">⏸ 暂停</button>`)}
           <button class="btn btn-outline btn-sm" onclick="showAdjustForm('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>调整</button>
           <button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>完成</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTask('${t.id}')">删除</button>
@@ -1695,10 +1904,25 @@ function setProjectAttr(projectName, value) {
 function showTaskDelays(taskId) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === taskId);
-  if (!task || task.delayRecords.length === 0) return;
+  if (!task || (task.delayRecords.length === 0 && (!task.pauseRecords || task.pauseRecords.length === 0))) return;
 
   // Sort by date, then by input time (createdAt) for same-day ordering
   const sorted = [...task.delayRecords].sort((a, b) => {
+    const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
+    if (dCmp !== 0) return dCmp;
+    const da = a.date || '';
+    const db = b.date || '';
+    if (da !== db) return da.localeCompare(db);
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
+  });
+
+  // 暂停/启动事件展开为时间线节点（与延期记录按日期合并渲染，不影响累计工时）
+  const pauseEvents = [];
+  (task.pauseRecords || []).forEach(p => {
+    pauseEvents.push({ _pause: 'start', date: p.pausedAt || '', createdAt: p.createdAt || '', rec: p });
+    if (p.resumedAt) pauseEvents.push({ _pause: 'end', date: p.resumedAt, createdAt: p.createdAt || '', rec: p });
+  });
+  const merged = [...sorted, ...pauseEvents].sort((a, b) => {
     const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
     if (dCmp !== 0) return dCmp;
     const da = a.date || '';
@@ -1711,7 +1935,25 @@ function showTaskDelays(taskId) {
   let segmentBaseline = task.plannedEndDate;
   let accumulatedHours = 0;
 
-  sorted.forEach(record => {
+  merged.forEach(entry => {
+    if (entry._pause) {
+      const p = entry.rec;
+      const isStart = entry._pause === 'start';
+      const when = isStart ? p.pausedAt : p.resumedAt;
+      const tagHtml = isStart
+        ? '<span style="background:#fff3cd;color:#856404;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">⏸ 暂停</span>'
+        : '<span style="background:#d1ecf1;color:#0c5460;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">▶ 启动</span>';
+      const descHtml = isStart
+        ? `${formatDate(when)} · ${p.fromStatus ? escAttr(p.fromStatus) + ' → 暂停' : '任务暂停'}`
+        : `${formatDate(when)} · 恢复为 ${escAttr(p.fromStatus || '进行中')}`;
+      timelineHtml += `<div class="timeline-item">
+        <div class="timeline-date">${tagHtml}${descHtml}<span style="margin-left:8px;"><button class="btn btn-outline btn-sm" onclick="editPauseRecord('${taskId}','${p.id}')">编辑</button> <button class="btn btn-danger btn-sm" onclick="deletePauseRecord('${taskId}','${p.id}')">删除</button></span></div>
+        <div class="timeline-desc" style="font-weight:600;">${isStart ? '暂停时间' : '启动时间'}：${formatDate(when)}</div>
+        ${p.reason ? `<div class="timeline-desc" style="color:#666;">备注：${escAttr(p.reason)}</div>` : ''}
+      </div>`;
+      return;
+    }
+    const record = entry;
     let tag, desc, extra = '';
     if (record.type === 'adjust') {
       accumulatedHours = 0;
@@ -1790,8 +2032,14 @@ function showTaskDelays(taskId) {
   openModal(`
     <div class="modal-header">
       <h3>延期记录 - ${task.taskName}</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
+      <div style="display:flex; gap:8px; align-items:center;">
+        ${task.status === '暂停'
+          ? `<button class="btn btn-outline btn-sm" onclick="_pendingDelayModalTaskId='${taskId}'; resumeTask('${taskId}')" style="color:#856404;">▶ 启动任务</button>`
+          : (task.status === '已完成' ? '' : `<button class="btn btn-outline btn-sm" onclick="_pendingDelayModalTaskId='${taskId}'; pauseTask('${taskId}')">⏸ 暂停任务</button>`)}
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
     </div>
+    ${task.status === '暂停' ? '<p style="font-size:12px; color:#856404; background:var(--warning-bg); border-radius:6px; padding:8px 10px; margin-bottom:12px;">任务暂停中：不受「影响所有任务」的临时事项 / 交付件更新影响，不记录延期。</p>' : ''}
     <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${formatDate(task.plannedEndDate)} ${task.adjustedEndDate && dOnly(task.adjustedEndDate) !== dOnly(task.plannedEndDate) ? ' → 调整为：' + formatDate(task.adjustedEndDate) : ''}${isDelayed ? ` · 当前完成时间：<span style="color:#dc3545; font-weight:600;">${formatDate(finalEnd)}</span>` : ''}</p>
     ${timelineHtml}
   `);
@@ -1817,8 +2065,9 @@ function showTempForm(tempId, forcePlanned) {
   const title = item ? (isExpected ? '编辑预期事件' : '编辑临时事项') : (isExpected ? '新建预期事件' : '新建临时事项');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
-  const taskCheckboxes = incompleteTasks.map(t =>
-    `<label><input type="checkbox" value="${t.id}" class="temp-task-cb" ${item && item.affectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  const taskCheckboxes = incompleteTasks.map(t => t.status === '暂停'
+    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="temp-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+    : `<label><input type="checkbox" value="${t.id}" class="temp-task-cb" ${item && item.affectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
 
   // Reset pending files; for edit, pre-populate with existing attachments (as metadata, not actual File objects)
@@ -1886,7 +2135,7 @@ function showTempForm(tempId, forcePlanned) {
       <div class="form-group">
         <label>影响范围</label>
         <select id="mTempImpactType" onchange="toggleTempTaskSelect()">
-          <option value="all" ${item && item.impactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="all" ${item && item.impactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
           <option value="specific" ${item && item.impactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -2214,7 +2463,8 @@ try {
     affectedTaskIds = [...document.querySelectorAll('.temp-task-cb:checked')].map(cb => cb.value);
     if (affectedTaskIds.length === 0) { showToast('请至少选择一个任务', 'error'); return; }
   } else {
-    affectedTaskIds = data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
+    // 「影响所有任务」不含暂停中的任务：暂停期间不记延期
+    affectedTaskIds = data.tasks.filter(t => t.status !== '已完成' && t.status !== '暂停').map(t => t.id);
   }
 
   if (tempId) {
@@ -2225,7 +2475,7 @@ try {
       const clearTargets = status === 'planned' ? oldItem.affectedTaskIds.slice() : removedTaskIds;
       clearTargets.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task) {
+        if (task && task.status !== '暂停') {
           task.delayRecords = task.delayRecords.filter(r => r.causedByTempItemId !== tempId);
           recalcTaskEndDate(task);
         }
@@ -2233,7 +2483,7 @@ try {
 
       if (status === 'done') affectedTaskIds.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task) {
+        if (task && task.status !== '暂停') {
           let existingRecord = task.delayRecords.find(r => r.causedByTempItemId === tempId);
           if (existingRecord) {
             existingRecord.delayHours = delayHours;
@@ -2299,7 +2549,7 @@ try {
     if (status === 'done') {
       affectedTaskIds.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task) {
+        if (task && task.status !== '暂停') {
           task.delayRecords.push({
             id: genId(),
             date,
@@ -2395,8 +2645,11 @@ function recalcTaskEndDate(task) {
   task.adjustedEndDate = lastAdjust ? (lastAdjust.adjustToDate || lastAdjust.newEndDate) : '';
 
   // Status resolution: an explicit manual status / completion record wins.
+  // 暂停中的任务保持暂停，不因延期重算改写状态
   const statusRecords = sorted.filter(r => r.type === 'status' || r.type === 'complete');
-  if (statusRecords.length) {
+  if (task.status === '暂停') {
+    // 暂停保护：仅重算完成时间，不动状态
+  } else if (statusRecords.length) {
     const last = statusRecords[statusRecords.length - 1];
     task.status = last.type === 'complete' ? '已完成' : last.toStatus;
   } else if (task.status !== '已完成') {
@@ -2498,7 +2751,7 @@ function editStatusRecord(taskId, recordId) {
   if (!task) return;
   const rec = task.delayRecords.find(r => r.id === recordId);
   if (!rec) return;
-  const statuses = ['未开始', '进行中', '已完成', '已延期'];
+  const statuses = ['未开始', '进行中', '已完成', '已延期', '暂停'];
   const opts = statuses.map(s => `<option value="${s}" ${s === rec.toStatus ? 'selected' : ''}>${s}</option>`).join('');
   openModal(`
     <div class="modal-header"><h3>修改状态变更记录</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
@@ -2708,11 +2961,13 @@ function showDeliveryForm(deliveryId, forcePlanned) {
   const title = item ? (isExpected ? '编辑预期交付件' : '编辑交付件更新') : (isExpected ? '新建预期交付件' : '新建交付件更新');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
-  const blockCheckboxes = incompleteTasks.map(t =>
-    `<label><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" ${item && item.blockAffectedTaskIds && item.blockAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  const blockCheckboxes = incompleteTasks.map(t => t.status === '暂停'
+    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+    : `<label><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" ${item && item.blockAffectedTaskIds && item.blockAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
-  const processCheckboxes = incompleteTasks.map(t =>
-    `<label><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" ${item && item.processAffectedTaskIds && item.processAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
+  const processCheckboxes = incompleteTasks.map(t => t.status === '暂停'
+    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+    : `<label><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" ${item && item.processAffectedTaskIds && item.processAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
 
   _pendingFiles = [];
@@ -2784,7 +3039,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
       <div class="form-group">
         <select id="mDeliveryBlockImpactType" onchange="toggleDeliveryBlockTaskSelect()">
           <option value="none" ${item && item.blockImpactType === 'none' ? 'selected' : ''}>无</option>
-          <option value="all" ${item && item.blockImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="all" ${item && item.blockImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
           <option value="specific" ${item && item.blockImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -2802,7 +3057,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
       <div class="form-group">
         <select id="mDeliveryProcessImpactType" onchange="toggleDeliveryProcessTaskSelect()">
           <option value="none" ${item && item.processImpactType === 'none' ? 'selected' : ''}>无</option>
-          <option value="all" ${item && item.processImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延</option>
+          <option value="all" ${item && item.processImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
           <option value="specific" ${item && item.processImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -2865,7 +3120,8 @@ function collectDeliveryAffectedTasks(impactType, checkboxClass, data) {
     if (ids.length === 0) return null; // signal validation error
     return ids;
   }
-  return data.tasks.filter(t => t.status !== '已完成').map(t => t.id);
+  // 「影响所有任务」不含暂停中的任务：暂停期间不记延期
+  return data.tasks.filter(t => t.status !== '已完成' && t.status !== '暂停').map(t => t.id);
 }
 
 async function saveDeliveryItem(deliveryId) {
@@ -2906,6 +3162,8 @@ try {
   const allAffectedTaskIds = Array.from(new Set([...blockAffectedTaskIds, ...processAffectedTaskIds]));
 
   function applyDeliveryRecordsToTask(task, itemId, createdAt) {
+    // 暂停中的任务：不新增/不清除延期记录，完成时间保持冻结
+    if (task.status === '暂停') return;
     // Remove old records from this delivery item for this task
     task.delayRecords = task.delayRecords.filter(r => r.causedByDeliveryItemId !== itemId);
     // Add block effect record
@@ -3820,9 +4078,10 @@ function renderReview() {
     const t = row.task;
     const realDelayCount = row.recs.filter(r => r.type !== 'status' && r.type !== 'complete').length;
     const statusCount = row.recs.filter(r => r.type === 'status' || r.type === 'complete').length;
+    const pauseCount = (t.pauseRecords || []).length;
     let delayCell = '-';
-    if (row.recs.length > 0) {
-      const label = realDelayCount > 0 ? realDelayCount + ' 次延期' : statusCount + ' 次变更';
+    if (row.recs.length > 0 || pauseCount > 0) {
+      const label = realDelayCount > 0 ? realDelayCount + ' 次延期' : (statusCount > 0 ? statusCount + ' 次变更' : pauseCount + ' 次暂停');
       delayCell = `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${label} — 详情</span>`;
     }
     const daysTask = (row.delayHours / 8).toFixed(1);
@@ -3833,7 +4092,7 @@ function renderReview() {
       <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
       <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
       <td class="date-cell" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
-      <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : 'delayed'}">${t.status}</span></td>
+      <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : t.status === '暂停' ? 'paused' : 'delayed'}">${t.status}</span></td>
       <td>${delayCell}</td>
       <td style="text-align:center;">${row.adjustCount > 0 ? row.adjustCount : '-'}</td>
       <td style="text-align:center;">${row.tempDelayCount > 0 ? row.tempDelayCount : '-'}</td>
@@ -3968,7 +4227,7 @@ function showBatchImport() {
       <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
       <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
-      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）<br>
+      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期 / 暂停（默认"未开始"）<br>
       提示：项目属性（售前/售中/售后）不在导入范围，导入后请在项目标题右侧的下拉中手动设置。
     </div>
     <div id="importHelpJSON" class="import-format-help" style="display:none;">
@@ -4111,7 +4370,7 @@ function parseCsvImport(raw) {
     if (startDate && !nStartDate) { errors.push({ row: i + 1, msg: '开始时间格式无法识别: ' + startDate }); continue; }
     if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: i + 1, msg: '计划完成时间格式无法识别: ' + plannedEndDate }); continue; }
 
-    const validStatus = ['未开始', '进行中', '已完成', '已延期'];
+    const validStatus = ['未开始', '进行中', '已完成', '已延期', '暂停'];
     const finalStatus = validStatus.includes(status) ? status : '未开始';
 
     rows.push({ projectName, projectTitle, taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status: finalStatus });
@@ -4144,7 +4403,7 @@ function previewImportData() {
         const nPlannedEndDate = normalizeDate(plannedEndDate);
         if (startDate && !nStartDate) { errors.push({ row: idx + 1, msg: 'startDate 格式无法识别: ' + startDate }); return; }
         if (plannedEndDate && !nPlannedEndDate) { errors.push({ row: idx + 1, msg: 'plannedEndDate 格式无法识别: ' + plannedEndDate }); return; }
-        const validStatus = ['未开始', '进行中', '已完成', '已延期'];
+        const validStatus = ['未开始', '进行中', '已完成', '已延期', '暂停'];
         const status = validStatus.includes(item.status) ? item.status : '未开始';
         importPreviewData.push({ projectName: item.projectName, projectTitle: item.projectTitle || '', taskName: item.taskName, startDate: nStartDate, plannedEndDate: nPlannedEndDate, status });
       });
@@ -4249,7 +4508,7 @@ function showBatchSupplement() {
       <code>需求分析,PRJ-001,2024-06-15,2024-06-01,未开始</code><br><br>
       <strong>示例（无表头，按固定顺序）：</strong><br>
       <code>PRJ-001,需求管理平台,前端开发,2024-06-10,2024-06-25,进行中</code><br><br>
-      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期（默认"未开始"）<br>
+      <strong>状态可选值：</strong>未开始 / 进行中 / 已完成 / 已延期 / 暂停（默认"未开始"）<br>
       提示：项目属性（售前/售中/售后）不在导入范围，导入后请在项目标题右侧的下拉中手动设置。
     </div>
     <div id="importHelpJSON" class="import-format-help" style="display:none;">
@@ -4307,6 +4566,8 @@ function getTaskCompletionDT(task) {
 // 任务完成时间（点击完成时填的实际完成时间）之后发生的不记入；任务无完成时间则不截断。
 // 返回新增记录数。
 function linkHistoryTempItemsToTask(task, startDT, nowDT, data) {
+  // 暂停中的任务不补录历史临时事项
+  if (task.status === '暂停') return 0;
   let added = 0;
   const completionDT = getTaskCompletionDT(task);
   data.tempItems.forEach(item => {
@@ -4356,6 +4617,7 @@ function executeBatchSupplement() {
       plannedEndDate: item.plannedEndDate,
       status: item.status,
       delayRecords: [],
+      pauseRecords: [],
       currentEndDate: item.plannedEndDate
     };
     data.tasks.push(task);
