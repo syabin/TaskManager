@@ -90,6 +90,17 @@ tr:hover { background: var(--bg-light); }
 .status-delayed { background: var(--danger-bg-light); color: var(--danger-text-light); }
 .status-paused { background: var(--warning-bg); color: #856404; }
 
+/* 周期汇报 */
+.report-day { margin-bottom:16px; }
+.report-day-title { font-size:14px; font-weight:600; padding:8px 12px; background:var(--bg-light); border:1px solid var(--border-light); border-bottom:none; border-radius:6px 6px 0 0; display:flex; justify-content:space-between; align-items:center; }
+.report-day-count { font-size:12px; color:var(--text-muted); font-weight:400; }
+.report-day-body { border:1px solid var(--border-light); border-radius:0 0 6px 6px; padding:6px 12px; }
+.report-item { display:flex; align-items:baseline; gap:8px; padding:6px 0; border-bottom:1px dashed var(--border-light); font-size:13px; flex-wrap:wrap; }
+.report-item:last-child { border-bottom:none; }
+.report-item-tag { padding:2px 6px; border-radius:4px; font-size:11px; white-space:nowrap; flex-shrink:0; }
+.report-item-main { font-weight:500; }
+.report-item-meta { color:var(--text-secondary); font-size:12px; }
+
 .delay-link { color: var(--primary); cursor: pointer; text-decoration: underline; }
 .delay-link:hover { color: var(--primary-dark); }
 
@@ -396,6 +407,7 @@ tr:hover { background: var(--bg-light); }
   <div class="card">
     <div class="card-header">
       <span class="card-title">任务汇总</span>
+      <button class="btn btn-outline btn-sm" onclick="showReportModal()" title="按天汇报指定时间段内的完成、新增、调整等记录">📋 周期汇报</button>
     </div>
     <div class="filter-bar">
       <div class="form-group">
@@ -1069,8 +1081,10 @@ function switchTab(name) {
 }
 
 // ====== Modal ======
-function openModal(html) {
+function openModal(html, maxWidth) {
   document.getElementById('modalContent').innerHTML = html;
+  const modal = document.querySelector('#modalOverlay .modal');
+  if (modal) modal.style.maxWidth = maxWidth || '';
   document.getElementById('modalOverlay').classList.add('active');
 }
 function closeModal() {
@@ -4102,6 +4116,276 @@ function renderReview() {
   });
   html += '</tbody></table>';
   document.getElementById('reviewList').innerHTML = html;
+}
+
+// ====== 周期汇报 ======
+// 指定时间段内按天汇总：任务完成、新增临时事项、交付件更新、计划调整、状态变更、暂停/启动。
+// 每条带具体时间与描述；汇报可一键复制为 Markdown 分享。
+var _reportRange = { start: '', end: '' };
+
+function showReportModal() {
+  const today = new Date();
+  const start = _reportRange.start || fmtDateLocal(new Date(today.getFullYear(), today.getMonth(), 1));
+  const end = _reportRange.end || fmtDateLocal(today);
+  openModal(`
+    <div class="modal-header">
+      <h3>周期汇报</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="filter-bar" style="margin-bottom:12px;">
+      <div class="form-group" style="min-width:150px;">
+        <label>开始日期</label>
+        <input type="date" id="reportDateStart" value="${start}">
+      </div>
+      <div class="form-group" style="min-width:150px;">
+        <label>结束日期</label>
+        <input type="date" id="reportDateEnd" value="${end}">
+      </div>
+      <div class="form-group">
+        <label>快捷范围</label>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReportQuickRange('thisweek')">本周</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReportQuickRange('lastweek')">上周</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReportQuickRange('thismonth')">本月</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setReportQuickRange('lastmonth')">上月</button>
+        </div>
+      </div>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-outline" onclick="copyReportMarkdown()">复制 Markdown</button>
+          <button class="btn btn-primary" onclick="renderReport()">生成汇报</button>
+        </div>
+      </div>
+    </div>
+    <div id="reportBody"></div>
+  `, '880px');
+  renderReport();
+}
+
+function setReportQuickRange(type) {
+  const today = new Date();
+  let start, end;
+  if (type === 'thisweek') {
+    start = getMonday(today);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (type === 'lastweek') {
+    start = getMonday(today); start.setDate(start.getDate() - 7);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (type === 'thismonth') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  } else if (type === 'lastmonth') {
+    start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    end = new Date(today.getFullYear(), today.getMonth(), 0);
+  }
+  document.getElementById('reportDateStart').value = fmtDateLocal(start);
+  document.getElementById('reportDateEnd').value = fmtDateLocal(end);
+  renderReport();
+}
+
+// 归集时间段内的汇报事件：{ 'YYYY-MM-DD': { complete/temp/delivery/adjust/status/pause: [...] } }
+// 归日规则：完成→实际完成时间；调整/状态变更→记录日期；临时事项→事项日期；交付件→交付日期；暂停/启动→各自时间。
+// 预期事件 / 预期交付件（尚未补日期）不入汇报。
+function collectReportEvents(data, start, end) {
+  const days = {};
+  const ensure = d => { if (!days[d]) days[d] = { complete: [], temp: [], delivery: [], adjust: [], status: [], pause: [] }; return days[d]; };
+  const inRange = d => d && d >= start && d <= end;
+  const timeOf = v => (v && v.length >= 16) ? v.slice(11, 16) : '';
+
+  data.tasks.forEach(t => {
+    (t.delayRecords || []).forEach(r => {
+      const day = dOnly(r.date);
+      if (!inRange(day)) return;
+      if (r.type === 'complete') {
+        const when = r.completedAt || r.date;
+        ensure(dOnly(when)).complete.push({ task: t, time: timeOf(when), reason: r.reason || '', sortKey: when || '' });
+      } else if (r.type === 'adjust') {
+        ensure(day).adjust.push({ task: t, time: timeOf(r.date), to: r.adjustToDate || r.newEndDate || '', reason: r.reason || '', sortKey: r.date || '' });
+      } else if (r.type === 'status') {
+        ensure(day).status.push({ task: t, time: timeOf(r.date), from: r.fromStatus || '未知', to: r.toStatus || '', reason: r.reason || '', sortKey: r.date || '' });
+      }
+    });
+    (t.pauseRecords || []).forEach(p => {
+      if (inRange(dOnly(p.pausedAt))) {
+        ensure(dOnly(p.pausedAt)).pause.push({ task: t, kind: 'pause', time: timeOf(p.pausedAt), reason: p.reason || '', sortKey: p.pausedAt || '' });
+      }
+      if (p.resumedAt && inRange(dOnly(p.resumedAt))) {
+        ensure(dOnly(p.resumedAt)).pause.push({ task: t, kind: 'resume', time: timeOf(p.resumedAt), reason: p.reason || '', sortKey: p.resumedAt || '' });
+      }
+    });
+  });
+
+  data.tempItems.forEach(item => {
+    const day = dOnly(item.date);
+    if (!inRange(day)) return;
+    const dur = item.durationUnit === 'd' ? `${item.durationValue || 0} 天` : `${item.durationValue || 0} 小时`;
+    const scope = item.impactType === 'all' ? '所有未完成任务' : `${(item.affectedTaskIds || []).length} 个任务`;
+    ensure(day).temp.push({ item, time: timeOf(item.date), dur, scope, sortKey: item.date || item.createdAt || '' });
+  });
+
+  data.deliveryItems.forEach(item => {
+    const dDate = item.deliveryDate || item.date;
+    const day = dOnly(dDate);
+    if (!inRange(day)) return;
+    const dur = item.processUnit === 'd' ? `${item.processValue || 0} 天` : `${item.processValue || 0} 小时`;
+    const scope = (item.blockImpactType === 'all' || item.processImpactType === 'all')
+      ? '所有未完成任务'
+      : `${new Set([...(item.blockAffectedTaskIds || []), ...(item.processAffectedTaskIds || [])]).size} 个任务`;
+    ensure(day).delivery.push({ item, time: timeOf(dDate), dur, scope, sortKey: dDate || item.createdAt || '' });
+  });
+
+  // 每天内按时间先后排序
+  Object.keys(days).forEach(d => {
+    ['complete', 'temp', 'delivery', 'adjust', 'status', 'pause'].forEach(k => {
+      days[d][k].sort((a, b) => (a.sortKey || '').localeCompare(b.sortKey || ''));
+    });
+  });
+  return days;
+}
+
+function countReportEvents(days) {
+  const c = { complete: 0, temp: 0, delivery: 0, adjust: 0, status: 0, pause: 0 };
+  Object.values(days).forEach(d => {
+    c.complete += d.complete.length;
+    c.temp += d.temp.length;
+    c.delivery += d.delivery.length;
+    c.adjust += d.adjust.length;
+    c.status += d.status.length;
+    c.pause += d.pause.length;
+  });
+  return c;
+}
+
+function renderReport() {
+  const startEl = document.getElementById('reportDateStart');
+  const endEl = document.getElementById('reportDateEnd');
+  const body = document.getElementById('reportBody');
+  if (!body) return;
+  const start = startEl ? startEl.value : '';
+  const end = endEl ? endEl.value : '';
+  if (!start || !end) { body.innerHTML = '<div class="empty-state"><p>请选择完整的日期范围</p></div>'; return; }
+  if (start > end) { showToast('开始日期不能晚于结束日期', 'error'); return; }
+  _reportRange = { start, end };
+
+  const data = loadData();
+  const days = collectReportEvents(data, start, end);
+  const counts = countReportEvents(days);
+  const total = counts.complete + counts.temp + counts.delivery + counts.adjust + counts.status + counts.pause;
+
+  let html = `<div class="stats-grid" style="margin-bottom:16px;">
+    <div class="stat-card"><div class="stat-value">${counts.complete}</div><div class="stat-label">完成任务</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.temp}</div><div class="stat-label">新增临时事项</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.delivery}</div><div class="stat-label">交付件更新</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.adjust}</div><div class="stat-label">计划调整</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.status}</div><div class="stat-label">状态变更</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.pause}</div><div class="stat-label">暂停 / 启动</div></div>
+  </div>`;
+
+  if (total === 0) {
+    html += '<div class="empty-state"><p>该时间段内没有可汇报的记录</p></div>';
+    body.innerHTML = html;
+    return;
+  }
+
+  const weekNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const itemHtml = (tagStyle, tagText, main, meta) =>
+    `<div class="report-item"><span class="report-item-tag" style="${tagStyle}">${tagText}</span><span class="report-item-main">${main}</span><span class="report-item-meta">${meta}</span></div>`;
+
+  Object.keys(days).sort((a, b) => b.localeCompare(a)).forEach(day => {
+    const d = days[day];
+    const dayTotal = d.complete.length + d.temp.length + d.delivery.length + d.adjust.length + d.status.length + d.pause.length;
+    const w = weekNames[new Date(day + 'T00:00:00').getDay()];
+    html += `<div class="report-day">
+      <div class="report-day-title"><span>${day} 周${w}</span><span class="report-day-count">${dayTotal} 条记录</span></div>
+      <div class="report-day-body">`;
+    d.complete.forEach(e => {
+      html += itemHtml('background:#dcfce7;color:#166534;', '✅ 完成',
+        `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
+        `${e.time || '--:--'}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
+    });
+    d.temp.forEach(e => {
+      html += itemHtml('background:#fff3cd;color:#856404;', '📝 临时事项',
+        escAttr(e.item.description),
+        `${e.time || '--:--'} · 时长 ${escAttr(e.dur)} · 影响 ${escAttr(e.scope)}`);
+    });
+    d.delivery.forEach(e => {
+      html += itemHtml('background:#dbeafe;color:#1d4ed8;', '📦 交付件更新',
+        escAttr(e.item.description),
+        `${e.time || '--:--'} · 处理 ${escAttr(e.dur)} · 影响 ${escAttr(e.scope)}`);
+    });
+    d.adjust.forEach(e => {
+      html += itemHtml('background:#d1ecf1;color:#0c5460;', '🔧 计划调整',
+        `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
+        `${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
+    });
+    d.status.forEach(e => {
+      html += itemHtml('background:#ede9fe;color:#5b21b6;', '🔄 状态变更',
+        `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
+        `${e.time || '--:--'} · ${escAttr(e.from)} → ${escAttr(e.to)}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
+    });
+    d.pause.forEach(e => {
+      const isPause = e.kind === 'pause';
+      html += itemHtml(isPause ? 'background:#fde68a;color:#92400e;' : 'background:#d1ecf1;color:#0c5460;',
+        isPause ? '⏸ 暂停' : '▶ 启动',
+        `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
+        `${e.time || '--:--'}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
+    });
+    html += '</div></div>';
+  });
+
+  body.innerHTML = html;
+}
+
+// 生成 Markdown 版汇报（供复制粘贴分享）
+function buildReportMarkdown(start, end) {
+  const data = loadData();
+  const days = collectReportEvents(data, start, end);
+  const counts = countReportEvents(days);
+  const mdSafe = s => String(s == null ? '' : s).replace(/\r?\n/g, ' ');
+  let md = `# 周期汇报（${start} ~ ${end}）\n\n`;
+  md += `- 完成任务：${counts.complete} 项\n- 新增临时事项：${counts.temp} 项\n- 交付件更新：${counts.delivery} 项\n`;
+  md += `- 计划调整：${counts.adjust} 次\n- 状态变更：${counts.status} 次\n- 暂停 / 启动：${counts.pause} 次\n\n`;
+  const sortedDays = Object.keys(days).sort((a, b) => b.localeCompare(a));
+  if (sortedDays.length === 0) { md += '该时间段内没有可汇报的记录。\n'; return md; }
+  sortedDays.forEach(day => {
+    const d = days[day];
+    md += `## ${day}\n\n`;
+    d.complete.forEach(e => { md += `- ✅ 完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}${e.time ? '（' + e.time + '）' : ''}${e.reason ? ' — ' + mdSafe(e.reason) : ''}\n`; });
+    d.temp.forEach(e => { md += `- 📝 临时事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 时长 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
+    d.delivery.forEach(e => { md += `- 📦 交付件更新 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 处理 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
+    d.adjust.forEach(e => { md += `- 🔧 计划调整 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
+    d.status.forEach(e => { md += `- 🔄 状态变更 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · ${mdSafe(e.from)} → ${mdSafe(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
+    d.pause.forEach(e => { md += `- ${e.kind === 'pause' ? '⏸ 暂停' : '▶ 启动'} [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
+    md += '\n';
+  });
+  return md;
+}
+
+function copyReportMarkdown() {
+  const startEl = document.getElementById('reportDateStart');
+  const endEl = document.getElementById('reportDateEnd');
+  const start = startEl ? startEl.value : '';
+  const end = endEl ? endEl.value : '';
+  if (!start || !end || start > end) { showToast('请选择有效的日期范围', 'error'); return; }
+  const md = buildReportMarkdown(start, end);
+  const done = () => showToast('汇报 Markdown 已复制到剪贴板');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(md).then(done, () => fallbackCopyText(md, done));
+  } else {
+    fallbackCopyText(md, done);
+  }
+}
+
+function fallbackCopyText(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { showToast('复制失败，请手动选择文本复制', 'error'); }
+  document.body.removeChild(ta);
 }
 
 // ====== Data Management ======
