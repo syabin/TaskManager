@@ -4330,6 +4330,7 @@ function renderHeatmap() {
 
 // 折线图：当月每日临时事项累计时长趋势
 // 绘制规则：只画到今天；休息日（周六/周日/节假日，调休上班日除外）当天无临时事项则跳过、不画点（线跨接过去）；8h 处画红色虚线阈值线
+// 高度自适应：先按默认高度绘制，再按左侧热力图实测高度换算 viewBox 高度重绘，使两栏视觉等高
 function renderHmTrend(days, year, month) {
   const wrap = document.getElementById('hmTrend');
   if (!wrap) return;
@@ -4353,41 +4354,58 @@ function renderHmTrend(days, year, month) {
     return;
   }
 
-  const W = 600, H = 250, padL = 36, padR = 14, padT = 14, padB = 24;
-  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const W = 600, padL = 36, padR = 14, padT = 14, padB = 24;
   const maxHours = Math.max.apply(null, pts.map(p => p.hours));
   const yMax = Math.max(8, Math.ceil(maxHours / 4) * 4);
-  const x = d => padL + innerW * (d - 1) / (daysInMonth - 1);
-  const y = v => padT + innerH * (1 - v / yMax);
 
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block;" font-family="inherit">`;
-  // 横向网格线 + y 轴刻度
-  for (let i = 0; i <= 4; i++) {
-    const v = yMax * i / 4;
-    const yy = y(v);
-    svg += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="#e9ecef" stroke-width="1"/>`;
-    svg += `<text x="${padL - 6}" y="${yy + 3}" font-size="9" fill="#999" text-anchor="end">${Math.round(v)}</text>`;
-  }
-  // 8h 阈值虚线
-  const y8 = y(8);
-  svg += `<line x1="${padL}" y1="${y8}" x2="${W - padR}" y2="${y8}" stroke="#dc3545" stroke-width="1.2" stroke-dasharray="5 4"/>`;
-  svg += `<text x="${W - padR}" y="${y8 - 4}" font-size="9" fill="#dc3545" text-anchor="end">8h 阈值</text>`;
-  // 折线：被跳过的日期（节假日无临时事项）不画点，线直接跨接过去，如 5 号之后连到 8 号
-  let path = '';
-  pts.forEach((p, i) => {
-    path += `${i === 0 ? 'M' : 'L'}${x(p.d).toFixed(1)} ${y(p.hours).toFixed(1)} `;
+  const buildSvg = (H) => {
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    const x = d => padL + innerW * (d - 1) / (daysInMonth - 1);
+    const y = v => padT + innerH * (1 - v / yMax);
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto;display:block;" font-family="inherit">`;
+    // 横向网格线 + y 轴刻度
+    for (let i = 0; i <= 4; i++) {
+      const v = yMax * i / 4;
+      const yy = y(v);
+      svg += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="#e9ecef" stroke-width="1"/>`;
+      svg += `<text x="${padL - 6}" y="${yy + 3}" font-size="9" fill="#999" text-anchor="end">${Math.round(v)}</text>`;
+    }
+    // 8h 阈值虚线
+    const y8 = y(8);
+    svg += `<line x1="${padL}" y1="${y8}" x2="${W - padR}" y2="${y8}" stroke="#dc3545" stroke-width="1.2" stroke-dasharray="5 4"/>`;
+    svg += `<text x="${W - padR}" y="${y8 - 4}" font-size="9" fill="#dc3545" text-anchor="end">8h 阈值</text>`;
+    // 折线：被跳过的日期（休息日无临时事项）不画点，线直接跨接过去，如 5 号之后连到 8 号
+    let path = '';
+    pts.forEach((p, i) => {
+      path += `${i === 0 ? 'M' : 'L'}${x(p.d).toFixed(1)} ${y(p.hours).toFixed(1)} `;
+    });
+    svg += `<path d="${path.trim()}" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // 数据点（原生 hover 提示）
+    pts.forEach(p => {
+      svg += `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.hours).toFixed(1)}" r="2.6" fill="#1a73e8"><title>${month}月${p.d}日 · ${hmHoursText(p.hours)}</title></circle>`;
+    });
+    // x 轴：每一天都显示日期刻度
+    for (let d = 1; d <= daysInMonth; d++) {
+      svg += `<text x="${x(d).toFixed(1)}" y="${H - 8}" font-size="8.5" fill="#999" text-anchor="middle">${d}</text>`;
+    }
+    svg += '</svg>';
+    return svg;
+  };
+
+  wrap.innerHTML = buildSvg(250);
+
+  // 与左侧热力图等高：目标像素高 → 按容器宽度换算为 viewBox 高度后重绘
+  requestAnimationFrame(() => {
+    const leftEl = document.querySelector('.hm-left');
+    const titleEl = document.querySelector('.hm-trend-title');
+    if (!leftEl || !wrap) return;
+    const boxW = wrap.clientWidth;
+    const targetH = leftEl.offsetHeight - (titleEl ? titleEl.offsetHeight + 8 : 0);
+    if (boxW > 0 && targetH > 100) {
+      wrap.innerHTML = buildSvg(Math.max(180, Math.round(targetH * W / boxW)));
+    }
   });
-  svg += `<path d="${path.trim()}" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-  // 数据点（原生 hover 提示）
-  pts.forEach(p => {
-    svg += `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.hours).toFixed(1)}" r="2.6" fill="#1a73e8"><title>${month}月${p.d}日 · ${hmHoursText(p.hours)}</title></circle>`;
-  });
-  // x 轴：每一天都显示日期刻度
-  for (let d = 1; d <= daysInMonth; d++) {
-    svg += `<text x="${x(d).toFixed(1)}" y="${H - 8}" font-size="8.5" fill="#999" text-anchor="middle">${d}</text>`;
-  }
-  svg += '</svg>';
-  wrap.innerHTML = svg;
 }
 
 function showHeatmapDayDetail(dayStr) {
@@ -4436,6 +4454,17 @@ function showHeatmapDayDetail(dayStr) {
     ${deliveryRows ? '<div class="report-day-body" style="border:none; padding:0;">' + deliveryRows + '</div>' : ''}
   `);
 }
+
+// 窗口尺寸变化时重算折线图高度（保持与热力图等高）
+var _hmResizeTimer = null;
+window.addEventListener('resize', function() {
+  if (_hmResizeTimer) return;
+  _hmResizeTimer = setTimeout(function() {
+    _hmResizeTimer = null;
+    var tab = document.getElementById('tab-heatmap');
+    if (tab && tab.classList.contains('active')) renderHeatmap();
+  }, 250);
+});
 
 // ====== 周期汇报 ======
 // 指定时间段内按天汇总：任务完成、新增临时事项、交付件更新、计划调整、状态变更、暂停/启动。
