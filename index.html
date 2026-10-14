@@ -517,7 +517,7 @@ tr:hover { background: var(--bg-light); }
         <div id="hmGrid" class="hm-grid"></div>
       </div>
       <div class="hm-right">
-        <div class="hm-trend-title">每日临时事项时长趋势（节假日无事项不绘制）</div>
+        <div class="hm-trend-title">每日临时事项时长趋势（休息日无事项不绘制）</div>
         <div id="hmTrend"></div>
       </div>
     </div>
@@ -4235,14 +4235,24 @@ function collectDailyDelays(data, year, month) {
     e.items.push({ kind: 'temp', item, hours });
   });
 
-  // 交付件更新 / 计划调整：不计入格子热值，仅供明细附注
+  // 交付件更新（按 causedByDeliveryItemId 聚合）/ 计划调整：不计入格子热值，仅供明细附注
   data.tasks.forEach(t => {
     (t.delayRecords || []).forEach(r => {
       const day = dOnly(r.date);
       if (!day || day.indexOf(prefix) !== 0) return;
       if (r.type === 'adjust') { ensure(day).adjusts++; }
       else if (r.type === 'delivery') {
-        ensure(day).deliveries.push({ task: t, hours: r.processHours || 0, reason: r.reason || '', date: r.date });
+        // 同一交付件对多个任务只聚合为一条：主描述=交付件说明，附受影响任务清单
+        const e = ensure(day);
+        const key = r.causedByDeliveryItemId || ('rec-' + r.id);
+        let g = e.deliveries.find(d => d.key === key);
+        if (!g) {
+          g = { key, desc: r.reason || '（无描述）', hours: r.processHours || 0, date: r.date, tasks: [] };
+          e.deliveries.push(g);
+        }
+        if (!g.tasks.some(x => x.projectName === t.projectName && x.taskName === t.taskName)) {
+          g.tasks.push({ projectName: t.projectName, taskName: t.taskName });
+        }
       }
     });
   });
@@ -4319,7 +4329,7 @@ function renderHeatmap() {
 }
 
 // 折线图：当月每日临时事项累计时长趋势
-// 绘制规则：只画到今天；节假日且当天无临时事项的日期跳过（折线随之断开，不虚构跨接）；8h 处画红色虚线阈值线
+// 绘制规则：只画到今天；休息日（周六/周日/节假日，调休上班日除外）当天无临时事项则跳过、不画点（线跨接过去）；8h 处画红色虚线阈值线
 function renderHmTrend(days, year, month) {
   const wrap = document.getElementById('hmTrend');
   if (!wrap) return;
@@ -4333,8 +4343,8 @@ function renderHmTrend(days, year, month) {
     if (dayStr > todayStr) continue; // 未来日期不绘制
     const entry = days[dayStr];
     const hasItem = !!(entry && entry.count > 0);
-    const isHoliday = HOLIDAYS.has(dayStr);
-    if (isHoliday && !hasItem) continue; // 节假日无临时事项 → 不参与绘制
+    // 周末与节假日同属休息日：当天无临时事项则不参与绘制（调休上班的周六/周日仍按工作日绘制）
+    if (!isWorkingDay(dayStr) && !hasItem) continue;
     pts.push({ d, hours: hasItem ? entry.hours : 0 });
   }
 
@@ -4400,12 +4410,17 @@ function showHeatmapDayDetail(dayStr) {
   if (entry.deliveries.length) extraNotes.push(`${entry.deliveries.length} 次交付件更新`);
   const extraNote = extraNotes.length
     ? `<p style="font-size:12px;color:var(--text-muted);margin:10px 0 8px;">当日另有 ${extraNotes.join('、')}（不计入格子时长）。</p>` : '';
-  const deliveryRows = entry.deliveries.map(e => `
-    <div class="report-item">
+  const deliveryRows = entry.deliveries.map(e => {
+    // 主描述=交付件更新本身；副位说明它导致了哪些任务延期
+    const taskNames = e.tasks.map(t => `[${escAttr(t.projectName)}] ${escAttr(t.taskName)}`);
+    const shown = taskNames.slice(0, 3).join('、');
+    const more = taskNames.length > 3 ? ` 等 ${taskNames.length} 个任务` : '';
+    return `<div class="report-item">
       <span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>
-      <span class="report-item-main">[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}</span>
-      <span class="report-item-meta">${formatDate(e.date).slice(11)} · 处理 ${e.hours}h${e.reason ? ' · ' + escAttr(e.reason) : ''}</span>
-    </div>`).join('');
+      <span class="report-item-main">${escAttr(e.desc)}</span>
+      <span class="report-item-meta">${formatDate(e.date).slice(11)} · 处理 ${e.hours}h · 导致 ${shown}${more}延期</span>
+    </div>`;
+  }).join('');
   openModal(`
     <div class="modal-header">
       <h3>当日明细 - ${dayStr}</h3>
