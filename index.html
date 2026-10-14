@@ -101,9 +101,13 @@ tr:hover { background: var(--bg-light); }
 .report-item-main { font-weight:500; }
 .report-item-meta { color:var(--text-secondary); font-size:12px; }
 
-/* 延期热力图（月视图） */
+/* 趋势图（月视图：热力图 + 折线图） */
 .hm-nav { display:flex; align-items:center; gap:8px; }
 .hm-month-label { font-size:14px; font-weight:600; min-width:110px; text-align:center; }
+.hm-layout { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+.hm-left { flex:0 0 auto; }
+.hm-right { flex:1 1 340px; min-width:320px; }
+.hm-trend-title { font-size:13px; font-weight:600; color:var(--text-secondary); margin-bottom:8px; }
 .hm-legend { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); margin-bottom:16px; flex-wrap:wrap; }
 .hm-legend-label { margin-right:4px; }
 .hm-legend-cell { width:14px; height:14px; border-radius:3px; display:inline-block; }
@@ -340,7 +344,7 @@ tr:hover { background: var(--bg-light); }
   <div class="tab-btns">
     <button class="tab-btn active" onclick="switchTab('tasks')">任务管理</button>
     <button class="tab-btn" onclick="switchTab('delays')">延期记录</button>
-    <button class="tab-btn" onclick="switchTab('heatmap')">延期热力图</button>
+    <button class="tab-btn" onclick="switchTab('heatmap')">趋势图</button>
     <button class="tab-btn" onclick="switchTab('review')">汇总</button>
     <button class="tab-btn" onclick="switchTab('data')">数据管理</button>
   </div>
@@ -479,28 +483,38 @@ tr:hover { background: var(--bg-light); }
 <div id="tab-heatmap" class="tab-content">
   <div class="card">
     <div class="card-header">
-      <span class="card-title">每日延期热力图</span>
-      <div class="hm-nav">
-        <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(-1)" title="上一月">‹</button>
-        <span id="hmMonthLabel" class="hm-month-label"></span>
-        <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(1)" title="下一月">›</button>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span class="card-title">每日趋势</span>
+        <div class="hm-nav">
+          <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(-1)" title="上一月">‹</button>
+          <span id="hmMonthLabel" class="hm-month-label"></span>
+          <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(1)" title="下一月">›</button>
+        </div>
       </div>
     </div>
     <div id="hmStats" class="stats-grid stats-grid-compact"></div>
-    <div class="hm-legend">
-      <span class="hm-legend-label">当日临时事项累计时长</span>
-      <span>少</span>
-      <span class="hm-legend-cell hm-l0" title="无临时事项"></span>
-      <span class="hm-legend-cell hm-l1" title="不足 4h"></span>
-      <span class="hm-legend-cell hm-l2" title="4 ~ 8h"></span>
-      <span class="hm-legend-cell hm-l3" title="8 ~ 16h"></span>
-      <span class="hm-legend-cell hm-l4" title="16h 及以上"></span>
-      <span>多</span>
+    <div class="hm-layout">
+      <div class="hm-left">
+        <div class="hm-legend">
+          <span class="hm-legend-label">当日临时事项累计时长</span>
+          <span>少</span>
+          <span class="hm-legend-cell hm-l0" title="无临时事项"></span>
+          <span class="hm-legend-cell hm-l1" title="不足 4h"></span>
+          <span class="hm-legend-cell hm-l2" title="4 ~ 8h"></span>
+          <span class="hm-legend-cell hm-l3" title="8 ~ 16h"></span>
+          <span class="hm-legend-cell hm-l4" title="16h 及以上"></span>
+          <span>多</span>
+        </div>
+        <div class="hm-weekdays">
+          <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+        </div>
+        <div id="hmGrid" class="hm-grid"></div>
+      </div>
+      <div class="hm-right">
+        <div class="hm-trend-title">每日临时事项时长趋势（节假日无事项不绘制）</div>
+        <div id="hmTrend"></div>
+      </div>
     </div>
-    <div class="hm-weekdays">
-      <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-    </div>
-    <div id="hmGrid" class="hm-grid"></div>
   </div>
 </div>
 
@@ -4284,6 +4298,72 @@ function renderHeatmap() {
   const tail = (7 - (offset + daysInMonth) % 7) % 7;
   for (let i = 0; i < tail; i++) html += '<div class="hm-cell hm-empty"></div>';
   grid.innerHTML = html;
+
+  renderHmTrend(days, _hmYear, _hmMonth);
+}
+
+// 折线图：当月每日临时事项累计时长趋势
+// 绘制规则：只画到今天；节假日且当天无临时事项的日期跳过（折线随之断开，不虚构跨接）；8h 处画红色虚线阈值线
+function renderHmTrend(days, year, month) {
+  const wrap = document.getElementById('hmTrend');
+  if (!wrap) return;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const todayStr = fmtDateLocal(new Date());
+  const prefix = year + '-' + String(month).padStart(2, '0');
+
+  const pts = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayStr = prefix + '-' + String(d).padStart(2, '0');
+    if (dayStr > todayStr) continue; // 未来日期不绘制
+    const entry = days[dayStr];
+    const hasItem = !!(entry && entry.count > 0);
+    const isHoliday = HOLIDAYS.has(dayStr);
+    if (isHoliday && !hasItem) continue; // 节假日无临时事项 → 不参与绘制
+    pts.push({ d, hours: hasItem ? entry.hours : 0 });
+  }
+
+  if (pts.length === 0) {
+    wrap.innerHTML = '<div class="empty-state"><p>暂无可绘制的数据</p></div>';
+    return;
+  }
+
+  const W = 460, H = 250, padL = 36, padR = 12, padT = 14, padB = 24;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const maxHours = Math.max.apply(null, pts.map(p => p.hours));
+  const yMax = Math.max(8, Math.ceil(maxHours / 4) * 4);
+  const x = d => padL + innerW * (d - 1) / (daysInMonth - 1);
+  const y = v => padT + innerH * (1 - v / yMax);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;height:auto;display:block;" font-family="inherit">`;
+  // 横向网格线 + y 轴刻度
+  for (let i = 0; i <= 4; i++) {
+    const v = yMax * i / 4;
+    const yy = y(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="#e9ecef" stroke-width="1"/>`;
+    svg += `<text x="${padL - 6}" y="${yy + 3}" font-size="9" fill="#999" text-anchor="end">${Math.round(v)}</text>`;
+  }
+  // 8h 阈值虚线
+  const y8 = y(8);
+  svg += `<line x1="${padL}" y1="${y8}" x2="${W - padR}" y2="${y8}" stroke="#dc3545" stroke-width="1.2" stroke-dasharray="5 4"/>`;
+  svg += `<text x="${W - padR}" y="${y8 - 4}" font-size="9" fill="#dc3545" text-anchor="end">8h 阈值</text>`;
+  // 折线：被跳过的日期处断开，不跨接
+  let path = '', lastD = null;
+  pts.forEach(p => {
+    const cmd = (lastD === null || p.d !== lastD + 1) ? 'M' : 'L';
+    path += `${cmd}${x(p.d).toFixed(1)} ${y(p.hours).toFixed(1)} `;
+    lastD = p.d;
+  });
+  svg += `<path d="${path.trim()}" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  // 数据点（原生 hover 提示）
+  pts.forEach(p => {
+    svg += `<circle cx="${x(p.d).toFixed(1)}" cy="${y(p.hours).toFixed(1)}" r="2.6" fill="#1a73e8"><title>${month}月${p.d}日 · ${hmHoursText(p.hours)}</title></circle>`;
+  });
+  // x 轴日期刻度
+  [1, 5, 10, 15, 20, 25, 30, daysInMonth].filter((v, i, a) => v <= daysInMonth && a.indexOf(v) === i).forEach(d => {
+    svg += `<text x="${x(d).toFixed(1)}" y="${H - 8}" font-size="9" fill="#999" text-anchor="middle">${d}</text>`;
+  });
+  svg += '</svg>';
+  wrap.innerHTML = svg;
 }
 
 function showHeatmapDayDetail(dayStr) {
