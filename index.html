@@ -4395,7 +4395,9 @@ function showHeatmapDayDetail(dayStr) {
   const days = collectDailyDelays(data, +dayStr.slice(0, 4), +dayStr.slice(5, 7));
   const entry = days[dayStr];
   if (!entry || entry.count === 0) { showToast('当日无临时事项'); return; }
-  const tempRows = entry.items.map(e => {
+  // 明细按时间升序（事项时间从早到晚），避免按数组顺序乱序
+  const sortedTemps = entry.items.slice().sort((a, b) => (a.item.date || '').localeCompare(b.item.date || ''));
+  const tempRows = sortedTemps.map(e => {
     const item = e.item;
     const dur = item.durationUnit === 'd' ? `${item.durationValue || 0} 天` : `${item.durationValue || 0} 小时`;
     const scope = item.impactType === 'all' ? '所有未完成任务' : `${(item.affectedTaskIds || []).length} 个任务`;
@@ -4410,7 +4412,9 @@ function showHeatmapDayDetail(dayStr) {
   if (entry.deliveries.length) extraNotes.push(`${entry.deliveries.length} 次交付件更新`);
   const extraNote = extraNotes.length
     ? `<p style="font-size:12px;color:var(--text-muted);margin:10px 0 8px;">当日另有 ${extraNotes.join('、')}（不计入格子时长）。</p>` : '';
-  const deliveryRows = entry.deliveries.map(e => {
+  // 交付件条目同样按时间升序
+  const sortedDeliveries = entry.deliveries.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const deliveryRows = sortedDeliveries.map(e => {
     // 主描述=交付件更新本身；副位说明它导致了哪些任务延期
     const taskNames = e.tasks.map(t => `[${escAttr(t.projectName)}] ${escAttr(t.taskName)}`);
     const shown = taskNames.slice(0, 3).join('、');
