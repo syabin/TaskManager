@@ -101,6 +101,28 @@ tr:hover { background: var(--bg-light); }
 .report-item-main { font-weight:500; }
 .report-item-meta { color:var(--text-secondary); font-size:12px; }
 
+/* 延期热力图（月视图） */
+.hm-nav { display:flex; align-items:center; gap:8px; }
+.hm-month-label { font-size:14px; font-weight:600; min-width:110px; text-align:center; }
+.hm-legend { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); margin-bottom:16px; flex-wrap:wrap; }
+.hm-legend-label { margin-right:4px; }
+.hm-legend-cell { width:14px; height:14px; border-radius:3px; display:inline-block; }
+.hm-weekdays { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; max-width:660px; margin-bottom:6px; }
+.hm-weekdays span { text-align:center; font-size:11px; color:var(--text-muted); }
+.hm-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; max-width:660px; }
+.hm-cell { aspect-ratio:1/1; border-radius:8px; border:1px solid var(--border-light); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; min-height:56px; }
+.hm-cell .hm-day { font-size:10px; opacity:.7; }
+.hm-cell .hm-val { font-size:13px; font-weight:600; }
+.hm-cell.hm-l0 { background:#f3f4f6; color:#9ca3af; }
+.hm-cell.hm-l1 { background:#fee2e2; color:#991b1b; }
+.hm-cell.hm-l2 { background:#fecaca; color:#7f1d1d; }
+.hm-cell.hm-l3 { background:#f87171; color:#ffffff; }
+.hm-cell.hm-l4 { background:#dc2626; color:#ffffff; }
+.hm-cell.hm-empty { background:transparent; border:none; }
+.hm-cell.hm-future { border-style:dashed; opacity:.55; }
+.hm-cell.hm-clickable { cursor:pointer; }
+.hm-cell.hm-clickable:hover { outline:2px solid var(--primary); }
+
 .delay-link { color: var(--primary); cursor: pointer; text-decoration: underline; }
 .delay-link:hover { color: var(--primary-dark); }
 
@@ -318,6 +340,7 @@ tr:hover { background: var(--bg-light); }
   <div class="tab-btns">
     <button class="tab-btn active" onclick="switchTab('tasks')">任务管理</button>
     <button class="tab-btn" onclick="switchTab('delays')">延期记录</button>
+    <button class="tab-btn" onclick="switchTab('heatmap')">延期热力图</button>
     <button class="tab-btn" onclick="switchTab('review')">汇总</button>
     <button class="tab-btn" onclick="switchTab('data')">数据管理</button>
   </div>
@@ -449,6 +472,35 @@ tr:hover { background: var(--bg-light); }
     </div>
     <div id="summaryStats" class="stats-grid"></div>
     <div id="reviewList" style="flex:1; overflow-y:auto; min-height:0;"></div>
+  </div>
+</div>
+
+<!-- Tab 2.5: 延期热力图（月视图） -->
+<div id="tab-heatmap" class="tab-content">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">每日延期热力图</span>
+      <div class="hm-nav">
+        <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(-1)" title="上一月">‹</button>
+        <span id="hmMonthLabel" class="hm-month-label"></span>
+        <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(1)" title="下一月">›</button>
+      </div>
+    </div>
+    <div id="hmStats" class="stats-grid stats-grid-compact"></div>
+    <div class="hm-legend">
+      <span class="hm-legend-label">当日临时事项累计时长</span>
+      <span>少</span>
+      <span class="hm-legend-cell hm-l0" title="无临时事项"></span>
+      <span class="hm-legend-cell hm-l1" title="不足 4h"></span>
+      <span class="hm-legend-cell hm-l2" title="4 ~ 8h"></span>
+      <span class="hm-legend-cell hm-l3" title="8 ~ 16h"></span>
+      <span class="hm-legend-cell hm-l4" title="16h 及以上"></span>
+      <span>多</span>
+    </div>
+    <div class="hm-weekdays">
+      <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+    </div>
+    <div id="hmGrid" class="hm-grid"></div>
   </div>
 </div>
 
@@ -1073,9 +1125,10 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn')[['tasks','delays','review','data'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.tab-btn')[['tasks','delays','heatmap','review','data'].indexOf(name)].classList.add('active');
   if (name === 'tasks') renderTasks();
   if (name === 'delays') renderDelayItems();
+  if (name === 'heatmap') renderHeatmap();
   if (name === 'review') renderReview();
   if (name === 'data') updateDataStatus();
 }
@@ -4116,6 +4169,159 @@ function renderReview() {
   });
   html += '</tbody></table>';
   document.getElementById('reviewList').innerHTML = html;
+}
+
+// ====== 延期热力图（月视图） ======
+// 每天一个格子，格子数值 = 当日累计临时事项时长（小时）；红色越深当日临时事项越密集。
+// 交付件更新与计划调整不计入格子热值，仅在当日明细中附注展示。
+var _hmYear = 0, _hmMonth = 0; // _hmMonth: 1-12
+
+function hmInitMonth() {
+  const now = new Date();
+  if (!_hmYear) { _hmYear = now.getFullYear(); _hmMonth = now.getMonth() + 1; }
+}
+
+function hmChangeMonth(delta) {
+  hmInitMonth();
+  _hmMonth += delta;
+  if (_hmMonth > 12) { _hmMonth = 1; _hmYear++; }
+  if (_hmMonth < 1) { _hmMonth = 12; _hmYear--; }
+  renderHeatmap();
+}
+
+// 归集某月每天的数据：{ 'YYYY-MM-DD': { count, hours, workdays, items:[临时事项], deliveries:[], adjusts } }
+// 临时事项按事项日期归集，累计时长统一换算为小时（durationUnit 'd' × 8）
+function collectDailyDelays(data, year, month) {
+  const prefix = year + '-' + String(month).padStart(2, '0');
+  const days = {};
+  const ensure = d => { if (!days[d]) days[d] = { count: 0, hours: 0, workdays: 0, items: [], deliveries: [], adjusts: 0 }; return days[d]; };
+
+  data.tempItems.forEach(item => {
+    const day = dOnly(item.date);
+    if (!day || day.indexOf(prefix) !== 0) return; // 预期事件（无日期）不入图
+    const hours = item.durationUnit === 'd' ? (item.durationValue || 0) * 8 : (item.durationValue || 0);
+    const e = ensure(day);
+    e.count++;
+    e.hours += hours;
+    e.workdays += hoursToWorkingDaysOffset(hours);
+    e.items.push({ kind: 'temp', item, hours });
+  });
+
+  // 交付件更新 / 计划调整：不计入格子热值，仅供明细附注
+  data.tasks.forEach(t => {
+    (t.delayRecords || []).forEach(r => {
+      const day = dOnly(r.date);
+      if (!day || day.indexOf(prefix) !== 0) return;
+      if (r.type === 'adjust') { ensure(day).adjusts++; }
+      else if (r.type === 'delivery') {
+        ensure(day).deliveries.push({ task: t, hours: r.processHours || 0, reason: r.reason || '', date: r.date });
+      }
+    });
+  });
+  return days;
+}
+
+// 热力分档（按当日临时事项累计小时数）：0 无记录 / 1 <4h / 2 4~8h / 3 8~16h / 4 ≥16h
+function hmLevel(entry) {
+  if (!entry || entry.count === 0) return 0;
+  const h = entry.hours;
+  if (h >= 16) return 4;
+  if (h >= 8) return 3;
+  if (h >= 4) return 2;
+  return 1;
+}
+
+// 小时数显示：整数不带小数点，如 6h / 12.5h
+function hmHoursText(h) {
+  return (Math.round(h * 10) / 10).toString().replace(/\.0$/, '') + 'h';
+}
+
+function renderHeatmap() {
+  hmInitMonth();
+  const grid = document.getElementById('hmGrid');
+  const label = document.getElementById('hmMonthLabel');
+  if (!grid) return;
+  label.textContent = _hmYear + '年' + _hmMonth + '月';
+
+  const data = loadData();
+  const days = collectDailyDelays(data, _hmYear, _hmMonth);
+
+  // 当月统计（口径：临时事项）
+  const dayKeys = Object.keys(days).filter(d => days[d].count > 0);
+  const totalHours = dayKeys.reduce((s, d) => s + days[d].hours, 0);
+  const totalCount = dayKeys.reduce((s, d) => s + days[d].count, 0);
+  let peakDay = '', peakVal = 0;
+  dayKeys.forEach(d => { if (days[d].hours > peakVal) { peakVal = days[d].hours; peakDay = d; } });
+  document.getElementById('hmStats').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${dayKeys.length}</div><div class="stat-label">有临时事项天数</div></div>
+    <div class="stat-card"><div class="stat-value">${totalCount}</div><div class="stat-label">临时事项数</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--danger);">${hmHoursText(totalHours)}</div><div class="stat-label">累计时长</div></div>
+    <div class="stat-card"><div class="stat-value" style="font-size:14px;">${peakDay ? peakDay.slice(5) + '（' + hmHoursText(peakVal) + '）' : '-'}</div><div class="stat-label">峰值日</div></div>
+  `;
+
+  // 网格：周一起始
+  const first = new Date(_hmYear, _hmMonth - 1, 1);
+  const offset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(_hmYear, _hmMonth, 0).getDate();
+  const todayStr = fmtDateLocal(new Date());
+  let html = '';
+  for (let i = 0; i < offset; i++) html += '<div class="hm-cell hm-empty"></div>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayStr = _hmYear + '-' + String(_hmMonth).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    const entry = days[dayStr];
+    const lv = hmLevel(entry);
+    const isFuture = dayStr > todayStr;
+    const cls = ['hm-cell', 'hm-l' + lv];
+    if (isFuture) cls.push('hm-future');
+    if (entry && entry.count > 0) cls.push('hm-clickable');
+    const valText = entry && entry.count > 0 ? hmHoursText(entry.hours) : '';
+    const title = entry && entry.count > 0
+      ? dayStr + ' · 临时事项 ' + entry.count + ' 项 · 累计 ' + hmHoursText(entry.hours) + (entry.adjusts ? ' · 另有 ' + entry.adjusts + ' 次计划调整' : '') + (entry.deliveries.length ? ' · ' + entry.deliveries.length + ' 次交付件更新' : '') + '（点击查看明细）'
+      : dayStr + (isFuture ? ' · 未到日期' : ' · 无临时事项');
+    const onclick = entry && entry.count > 0 ? ` onclick="showHeatmapDayDetail('${dayStr}')"` : '';
+    html += `<div class="${cls.join(' ')}" title="${title}"${onclick}><span class="hm-day">${d}</span>${valText ? '<span class="hm-val">' + valText + '</span>' : ''}</div>`;
+  }
+  const tail = (7 - (offset + daysInMonth) % 7) % 7;
+  for (let i = 0; i < tail; i++) html += '<div class="hm-cell hm-empty"></div>';
+  grid.innerHTML = html;
+}
+
+function showHeatmapDayDetail(dayStr) {
+  const data = loadData();
+  const days = collectDailyDelays(data, +dayStr.slice(0, 4), +dayStr.slice(5, 7));
+  const entry = days[dayStr];
+  if (!entry || entry.count === 0) { showToast('当日无临时事项'); return; }
+  const tempRows = entry.items.map(e => {
+    const item = e.item;
+    const dur = item.durationUnit === 'd' ? `${item.durationValue || 0} 天` : `${item.durationValue || 0} 小时`;
+    const scope = item.impactType === 'all' ? '所有未完成任务' : `${(item.affectedTaskIds || []).length} 个任务`;
+    return `<div class="report-item">
+      <span class="report-item-tag" style="background:#fff3cd;color:#856404;">📝 临时事项</span>
+      <span class="report-item-main">${escAttr(item.description)}</span>
+      <span class="report-item-meta">${formatDate(item.date).slice(11)} · 时长 ${escAttr(dur)} · 影响 ${escAttr(scope)}</span>
+    </div>`;
+  }).join('');
+  const extraNotes = [];
+  if (entry.adjusts) extraNotes.push(`${entry.adjusts} 次计划调整`);
+  if (entry.deliveries.length) extraNotes.push(`${entry.deliveries.length} 次交付件更新`);
+  const extraNote = extraNotes.length
+    ? `<p style="font-size:12px;color:var(--text-muted);margin:10px 0 8px;">当日另有 ${extraNotes.join('、')}（不计入格子时长）。</p>` : '';
+  const deliveryRows = entry.deliveries.map(e => `
+    <div class="report-item">
+      <span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>
+      <span class="report-item-main">[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}</span>
+      <span class="report-item-meta">${formatDate(e.date).slice(11)} · 处理 ${e.hours}h${e.reason ? ' · ' + escAttr(e.reason) : ''}</span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3>当日明细 - ${dayStr}</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">当日共 ${entry.count} 项临时事项，累计 ${hmHoursText(entry.hours)}（${entry.workdays.toFixed(1)} 个工作日）。</p>
+    <div class="report-day-body" style="border:none; padding:0;">${tempRows}</div>
+    ${extraNote}
+    ${deliveryRows ? '<div class="report-day-body" style="border:none; padding:0;">' + deliveryRows + '</div>' : ''}
+  `);
 }
 
 // ====== 周期汇报 ======
