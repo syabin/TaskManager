@@ -62,8 +62,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 /* 数据管理 Tab 卡片按内容自适应高度，不拉伸（消除大片空白） */
 #tab-data .card { flex: 0 0 auto; }
 /* 任务管理/汇总/数据管理/延期记录 Tab：卡片统一水平内边距 20px，标题、筛选、表格左对齐（延期记录底部为分页条，不留白） */
-#tab-tasks .card, #tab-review .card, #tab-data .card { padding: 0 20px 16px; }
-#tab-tasks .card-header, #tab-review .card-header, #tab-data .card-header { padding: 16px 0 0; }
+#tab-tasks .card, #tab-review .card, #tab-data .card, #tab-heatmap .card { padding: 0 20px 16px; }
+#tab-tasks .card-header, #tab-review .card-header, #tab-data .card-header, #tab-heatmap .card-header { padding: 16px 0 0; }
 #tab-delays .card { padding: 0 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 0; margin-bottom: 8px; flex-shrink: 0; }
 .card-header .btn { padding: 5px 12px; font-size: 13px; }
@@ -102,8 +102,10 @@ tr:hover { background: var(--bg-light); }
 .report-item-meta { color:var(--text-secondary); font-size:12px; }
 
 /* 趋势图（月视图：热力图 + 折线图） */
-.hm-nav { display:flex; align-items:center; gap:8px; }
-.hm-month-label { font-size:14px; font-weight:600; min-width:110px; text-align:center; }
+.hm-nav { display:flex; align-items:center; gap:6px; }
+.hm-nav-year { font-size:14px; font-weight:600; min-width:52px; text-align:center; }
+.hm-nav-month { font-size:14px; font-weight:600; min-width:34px; text-align:center; }
+.hm-nav-sep { width:1px; height:16px; background:var(--border); margin:0 4px; }
 .hm-layout { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
 .hm-left { flex:0 0 auto; }
 .hm-right { flex:1 1 340px; min-width:320px; }
@@ -486,8 +488,12 @@ tr:hover { background: var(--bg-light); }
       <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <span class="card-title">每日趋势</span>
         <div class="hm-nav">
+          <button class="btn btn-outline btn-sm" onclick="hmChangeYear(-1)" title="上一年">‹</button>
+          <span id="hmYearLabel" class="hm-nav-year"></span>
+          <button class="btn btn-outline btn-sm" onclick="hmChangeYear(1)" title="下一年">›</button>
+          <span class="hm-nav-sep"></span>
           <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(-1)" title="上一月">‹</button>
-          <span id="hmMonthLabel" class="hm-month-label"></span>
+          <span id="hmMonthLabel" class="hm-nav-month"></span>
           <button class="btn btn-outline btn-sm" onclick="hmChangeMonth(1)" title="下一月">›</button>
         </div>
       </div>
@@ -4198,8 +4204,16 @@ function hmInitMonth() {
 function hmChangeMonth(delta) {
   hmInitMonth();
   _hmMonth += delta;
+  // 跨年：月份越界时年份跟着进位/回退
   if (_hmMonth > 12) { _hmMonth = 1; _hmYear++; }
   if (_hmMonth < 1) { _hmMonth = 12; _hmYear--; }
+  renderHeatmap();
+}
+
+// 年份单独调整（月份保持不变）
+function hmChangeYear(delta) {
+  hmInitMonth();
+  _hmYear += delta;
   renderHeatmap();
 }
 
@@ -4253,9 +4267,11 @@ function hmHoursText(h) {
 function renderHeatmap() {
   hmInitMonth();
   const grid = document.getElementById('hmGrid');
-  const label = document.getElementById('hmMonthLabel');
+  const yearLabel = document.getElementById('hmYearLabel');
+  const monthLabel = document.getElementById('hmMonthLabel');
   if (!grid) return;
-  label.textContent = _hmYear + '年' + _hmMonth + '月';
+  if (yearLabel) yearLabel.textContent = _hmYear + ' 年';
+  if (monthLabel) monthLabel.textContent = _hmMonth + ' 月';
 
   const data = loadData();
   const days = collectDailyDelays(data, _hmYear, _hmMonth);
