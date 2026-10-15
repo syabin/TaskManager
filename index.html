@@ -924,12 +924,41 @@ function getArchiveDirName(item) {
 }
 
 async function _getSubDirHandle(item) {
+  var r = await resolveArchiveDir(item, true);
+  if (!r) {
+    console.error('Failed to get/create subfolder:', item && item.id);
+    return null;
+  }
+  return r.handle;
+}
+
+// 存档目录名以「事项日期」开头（{date}_{id}），一旦事项日期被修改，标准目录名就会失效，
+// 附件会被判为「本地目录不存在」。回退：按事项 id 在存档目录下扫描真实目录（id 唯一），
+// 保证日期改过之后附件仍能正常读写。返回 { name, handle }；create 为 true 时用标准名新建。
+async function resolveArchiveDir(item, create) {
   if (!_archiveHandle) return null;
-  var dirName = getArchiveDirName(item);
+  var standard = getArchiveDirName(item);
   try {
-    return await _archiveHandle.getDirectoryHandle(dirName, { create: true });
+    return { name: standard, handle: await _archiveHandle.getDirectoryHandle(standard, { create: !!create }) };
   } catch (e) {
-    console.error('Failed to get/create subfolder:', e);
+    var suffix = '_' + item.id;
+    try {
+      var it = _archiveHandle.entries();
+      var entry = await it.next();
+      while (!entry.done) {
+        var name = entry.value[0];
+        var handle = entry.value[1];
+        if (handle && handle.kind === 'directory' && name.slice(-suffix.length) === suffix) {
+          return { name: name, handle: handle };
+        }
+        entry = await it.next();
+      }
+    } catch (e2) {
+      console.warn('无法遍历存档目录（回退查找不可用）:', e2);
+    }
+    if (create) {
+      try { return { name: standard, handle: await _archiveHandle.getDirectoryHandle(standard, { create: true }) }; } catch (e3) {}
+    }
     return null;
   }
 }
@@ -979,10 +1008,10 @@ async function saveAttachmentsToDisk(item, files) {
 
 // List files in an item's archive subfolder
 async function listAttachments(item) {
-  if (!_archiveHandle) return [];
-  var dirName = getArchiveDirName(item);
+  var dir = await resolveArchiveDir(item, false);
+  if (!dir) return [];
   try {
-    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
+    var subDir = dir.handle;
     var result = [];
     var entries = subDir.values();
     var entry = await entries.next();
@@ -1002,10 +1031,10 @@ async function listAttachments(item) {
 
 // Delete an item's archive subfolder
 async function deleteAttachmentsFolder(item) {
-  if (!_archiveHandle) return;
-  var dirName = getArchiveDirName(item);
+  var dir = await resolveArchiveDir(item, false);
+  if (!dir) return;
   try {
-    await _archiveHandle.removeEntry(dirName, { recursive: true });
+    await _archiveHandle.removeEntry(dir.name, { recursive: true });
   } catch (e) {
     // Folder may not exist, ignore
   }
@@ -1013,10 +1042,10 @@ async function deleteAttachmentsFolder(item) {
 
 // Open a file from an item's archive subfolder
 async function openAttachment(item, filename) {
-  if (!_archiveHandle) return;
-  var dirName = getArchiveDirName(item);
+  var dir = await resolveArchiveDir(item, false);
+  if (!dir) { showToast('未找到该事项的本地附件目录', 'error'); return; }
   try {
-    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
+    var subDir = dir.handle;
     var fileHandle = await subDir.getFileHandle(filename);
     var file = await fileHandle.getFile();
     var url = URL.createObjectURL(file);
@@ -1029,11 +1058,10 @@ async function openAttachment(item, filename) {
 
 // Delete a single attachment file from disk and metadata
 async function deleteAttachmentFile(item, filename) {
-  if (!_archiveHandle) return;
-  var dirName = getArchiveDirName(item);
+  var dir = await resolveArchiveDir(item, false);
+  if (!dir) return;
   try {
-    var subDir = await _archiveHandle.getDirectoryHandle(dirName);
-    await subDir.removeEntry(filename);
+    await dir.handle.removeEntry(filename);
   } catch (e) {
     console.warn('Failed to delete file from disk:', e);
   }
@@ -5206,15 +5234,11 @@ async function ghListRemoteAttachments(cfg) {
 // 读本地存档目录里的附件文件；返回 { file, reason }，reason 用于告知跳过原因
 async function ghReadLocalAttachment(item, fileName) {
   if (!_archiveHandle) return { file: null, reason: '未授权存档目录' };
-  let subDir;
-  try {
-    subDir = await _archiveHandle.getDirectoryHandle(getArchiveDirName(item));
-  } catch (e) {
-    return { file: null, reason: '本地目录不存在（事项日期可能已变更）' };
-  }
+  const dir = await resolveArchiveDir(item, false);
+  if (!dir) return { file: null, reason: '本地目录不存在（事项日期可能已变更）' };
   let fh;
   try {
-    fh = await subDir.getFileHandle(fileName);
+    fh = await dir.handle.getFileHandle(fileName);
   } catch (e) {
     return { file: null, reason: '本地文件缺失' };
   }
