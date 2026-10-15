@@ -1607,6 +1607,16 @@ function saveTask(taskId, projectName) {
           reason: '',
           createdAt: new Date().toISOString()
         });
+        // 离开「已完成」→ 清完成时间戳并解冻期间记录；进入「已完成」→ 补完成时间并冻结之后记录
+        if (prevStatus === '已完成' && status !== '已完成') {
+          delete task.completedAt;
+          syncCompletionFrozenRecords(task);
+          recalcTaskEndDate(task);
+        } else if (status === '已完成' && !task.completedAt) {
+          task.completedAt = nowLocalDT();
+          syncCompletionFrozenRecords(task);
+          recalcTaskEndDate(task);
+        }
       }
     }
   } else {
@@ -1704,6 +1714,8 @@ function saveCompletion(id) {
   // 完成任务时自动收尾未结束的暂停记录（启动时间 = 实际完成时间）
   const openPause = (task.pauseRecords || []).find(r => !r.resumedAt);
   if (openPause) openPause.resumedAt = completedAt;
+  // 完成即冻结：晚于完成时间的记录不再计入完成时间（记录保留，撤销完成时会补回）
+  recalcTaskEndDate(task);
   saveData(data);
   if (_pendingDelayModalTaskId === id) {
     closeModal();
@@ -2000,8 +2012,9 @@ function renderTasks() {
     html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span><button class="btn-add-task" title="为该项目新建任务" onclick="addTaskToProject('${escAttr(proj)}')">＋</button></div><table>
       <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
-      const delayCount = t.delayRecords.filter(r => r.type !== 'status' && r.type !== 'complete').length;
-      const statusCount = t.delayRecords.filter(r => r.type === 'status' || r.type === 'complete').length;
+      const activeRecs = activeDelayRecords(t);
+      const delayCount = activeRecs.filter(r => r.type !== 'status' && r.type !== 'complete').length;
+      const statusCount = activeRecs.filter(r => r.type === 'status' || r.type === 'complete').length;
       const pauseCount = (t.pauseRecords || []).length;
       const delayLabel = delayCount > 0 ? delayCount + ' 次延期' : (statusCount > 0 ? statusCount + ' 次变更' : (pauseCount > 0 ? pauseCount + ' 次暂停' : ''));
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
@@ -2014,7 +2027,7 @@ function renderTasks() {
         <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
         <td class="date-cell" style="${hasDelay ? 'color:#dc3545; font-weight:500;' : ''}" title="${formatDate(t.currentEndDate)}">${formatDate(t.currentEndDate)}</td>
         <td><span class="status-badge status-${t.status === '未开始' ? 'not-started' : t.status === '进行中' ? 'in-progress' : t.status === '已完成' ? 'completed' : t.status === '暂停' ? 'paused' : 'delayed'}">${t.status}</span></td>
-        <td>${(t.delayRecords.length > 0 || pauseCount > 0) ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayLabel}</span>` : '-'}</td>
+        <td>${(activeRecs.length > 0 || pauseCount > 0) ? `<span class="delay-link" onclick="showTaskDelays('${t.id}')">${delayLabel}</span>` : '-'}</td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="showTaskForm('${t.id}')">编辑</button>
           ${t.status === '暂停'
@@ -2056,10 +2069,15 @@ function setProjectAttr(projectName, value) {
 function showTaskDelays(taskId) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === taskId);
-  if (!task || (task.delayRecords.length === 0 && (!task.pauseRecords || task.pauseRecords.length === 0))) return;
+  if (!task) return;
+  // 已完成任务：打开时兜底同步冻结标记（晚于完成时间的记录不再显示），有变化则落库
+  const changed = syncCompletionFrozenRecords(task);
+  const hasRecords = activeDelayRecords(task).length > 0 || (task.pauseRecords || []).length > 0;
+  if (!hasRecords) return;
+  if (changed > 0) { recalcTaskEndDate(task); saveData(data); }
 
   // Sort by date, then by input time (createdAt) for same-day ordering
-  const sorted = [...task.delayRecords].sort((a, b) => {
+  const sorted = [...activeDelayRecords(task)].sort((a, b) => {
     const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
     if (dCmp !== 0) return dCmp;
     const da = a.date || '';
@@ -2074,7 +2092,13 @@ function showTaskDelays(taskId) {
     pauseEvents.push({ _pause: 'start', date: p.pausedAt || '', createdAt: p.createdAt || '', rec: p });
     if (p.resumedAt) pauseEvents.push({ _pause: 'end', date: p.resumedAt, createdAt: p.createdAt || '', rec: p });
   });
-  const merged = [...sorted, ...pauseEvents].sort((a, b) => {
+    // 合成「任务完成」节点：状态已是已完成但没有完成记录（如通过编辑状态改为已完成）
+  const completionEvents = [];
+  if (task.status === '已完成' && !sorted.some(r => r.type === 'complete')) {
+    const doneDT = getTaskCompletionDT(task);
+    if (doneDT) completionEvents.push({ _completion: true, date: doneDT, createdAt: doneDT });
+  }
+  const merged = [...sorted, ...pauseEvents, ...completionEvents].sort((a, b) => {
     const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
     if (dCmp !== 0) return dCmp;
     const da = a.date || '';
@@ -2088,6 +2112,14 @@ function showTaskDelays(taskId) {
   let accumulatedHours = 0;
 
   merged.forEach(entry => {
+    if (entry._completion) {
+      timelineHtml += `<div class="timeline-item">
+        <div class="timeline-date"><span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">✅ 任务完成</span>${formatDate(entry.date)} · 任务完成</div>
+        <div class="timeline-desc" style="font-weight:600;">实际完成时间：${formatDate(entry.date)}</div>
+        <div class="timeline-desc" style="color:var(--text-muted);font-size:12px;">该完成任务未登记完成记录，可在任务「编辑」里改状态或补登记。</div>
+      </div>`;
+      return;
+    }
     if (entry._pause) {
       const p = entry.rec;
       const isStart = entry._pause === 'start';
@@ -2164,7 +2196,7 @@ function showTaskDelays(taskId) {
         <button class="btn btn-outline btn-sm" onclick="editAdjustRecord('${taskId}','${record.id}')">编辑</button>
       </span>` : '';
     const statusBtn = record.type === 'status' ? `<span style="margin-left:8px;"><button class="btn btn-outline btn-sm" onclick="editStatusRecord('${taskId}','${record.id}')">编辑</button></span>` : '';
-    const completeBtn = record.type === 'complete' ? `<span style="margin-left:8px;"><button class="btn btn-outline btn-sm" onclick="editCompleteRecord('${taskId}','${record.id}')">编辑</button></span>` : '';
+    const completeBtn = record.type === 'complete' ? `<span style="margin-left:8px;"><button class="btn btn-outline btn-sm" onclick="editCompleteRecord('${taskId}','${record.id}')">编辑</button> <button class="btn btn-danger btn-sm" onclick="deleteCompleteRecord('${taskId}','${record.id}')">删除</button></span>` : '';
     timelineHtml += `<div class="timeline-item">
       <div class="timeline-date">${tag}${desc}${adjustBtn}${statusBtn}${completeBtn}</div>
       ${dateLine}
@@ -2181,6 +2213,7 @@ function showTaskDelays(taskId) {
   </div>`;
   timelineHtml += '</div>';
 
+  const frozenCount = (task.delayRecords || []).filter(r => r._frozen).length;
   openModal(`
     <div class="modal-header">
       <h3>延期记录 - ${task.taskName}</h3>
@@ -2192,6 +2225,7 @@ function showTaskDelays(taskId) {
       </div>
     </div>
     ${task.status === '暂停' ? '<p style="font-size:12px; color:#856404; background:var(--warning-bg); border-radius:6px; padding:8px 10px; margin-bottom:12px;">任务暂停中：不受「影响所有任务」的临时事项 / 交付件更新影响，不记录延期。</p>' : ''}
+    ${frozenCount > 0 ? `<p style="font-size:12px; color:#1d4ed8; background:#dbeafe; border-radius:6px; padding:8px 10px; margin-bottom:12px;">任务已完成：<b>${frozenCount}</b> 条晚于完成时间的记录已隐藏（记录仍保留；若完成时间记错，可编辑或删除完成记录自动补回）。</p>` : ''}
     <p style="font-size:13px; color:#666; margin-bottom:12px;">计划完成时间：${formatDate(task.plannedEndDate)} ${task.adjustedEndDate && dOnly(task.adjustedEndDate) !== dOnly(task.plannedEndDate) ? ' → 调整为：' + formatDate(task.adjustedEndDate) : ''}${isDelayed ? ` · 当前完成时间：<span style="color:#dc3545; font-weight:600;">${formatDate(finalEnd)}</span>` : ''}</p>
     ${timelineHtml}
   `);
@@ -2739,14 +2773,17 @@ try {
 }
 
 function recalcTaskEndDate(task) {
-  if (task.delayRecords.length === 0) {
+  // 已完成的任务：冻结晚于完成时间的记录（完成即冻结；撤销完成时自动解冻）
+  syncCompletionFrozenRecords(task);
+  const activeRecs = activeDelayRecords(task);
+  if (activeRecs.length === 0) {
     task.currentEndDate = task.adjustedEndDate || task.plannedEndDate;
     if (task.status === '已延期') task.status = '未开始';
     return;
   }
 
   // Sort records by date, then by input time (createdAt) for same-day ordering
-  const sorted = [...task.delayRecords].sort((a, b) => {
+  const sorted = [...activeRecs].sort((a, b) => {
     const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
     if (dCmp !== 0) return dCmp;
     const da = a.date || '';
@@ -2981,6 +3018,30 @@ function saveCompleteRecord(taskId, recordId) {
   saveData(data);
   closeModal();
   showToast('完成记录已更新');
+  renderTasks();
+  showTaskDelays(taskId);
+}
+
+// 删除完成记录（如记错了）：任务回到完成前的状态，期间被冻结的延期记录自动补回
+function deleteCompleteRecord(taskId, recordId) {
+  const data = loadData();
+  const task = data.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const idx = task.delayRecords.findIndex(r => r.id === recordId && r.type === 'complete');
+  if (idx === -1) return;
+  const frozenBefore = (task.delayRecords || []).filter(r => r._frozen).length;
+  if (!confirm('确定删除这条完成记录？\n任务将回到未完成状态，期间被冻结的延期记录会自动补回。')) return;
+  task.delayRecords.splice(idx, 1);
+  // 状态回退：优先取删除前一条状态记录的状态，否则按进行中处理
+  const prevStatus = task.delayRecords.filter(r => r.type === 'status').map(r => r.toStatus).filter(Boolean).pop();
+  task.status = (prevStatus && prevStatus !== '已完成') ? prevStatus : '进行中';
+  delete task.completedAt;
+  // 解冻并重算：完成时间之后的延期记录回到时间线与完成时间计算中
+  const restored = syncCompletionFrozenRecords(task);
+  recalcTaskEndDate(task);
+  saveData(data);
+  closeModal();
+  showToast(restored > 0 ? `完成记录已删除，补回 ${restored} 条期间记录` : '完成记录已删除');
   renderTasks();
   showTaskDelays(taskId);
 }
@@ -4188,7 +4249,7 @@ function renderReview() {
   const dedupDelayHours = relatedTempItems.reduce((sum, item) => sum + getTempItemDelayHours(item), 0);
   const dedupProcessHours = relatedDeliveryItems.reduce((sum, item) => sum + getDeliveryItemProcessHours(item), 0);
 
-  const relevantRecords = (t) => t.delayRecords || [];
+  const relevantRecords = (t) => activeDelayRecords(t);
   let totalDelayRecords = 0;
   let totalAdjust = 0;
   let totalTempDelay = 0;
@@ -4307,7 +4368,7 @@ function collectDailyDelays(data, year, month) {
 
   // 交付件更新（按 causedByDeliveryItemId 聚合）/ 计划调整：不计入格子热值，仅供明细附注
   data.tasks.forEach(t => {
-    (t.delayRecords || []).forEach(r => {
+    activeDelayRecords(t).forEach(r => {
       const day = dOnly(r.date);
       if (!day || day.indexOf(prefix) !== 0) return;
       if (r.type === 'adjust') { ensure(day).adjusts++; }
@@ -4612,7 +4673,7 @@ function collectReportEvents(data, start, end) {
   const timeOf = v => (v && v.length >= 16) ? v.slice(11, 16) : '';
 
   data.tasks.forEach(t => {
-    (t.delayRecords || []).forEach(r => {
+    activeDelayRecords(t).forEach(r => {
       const day = dOnly(r.date);
       if (!inRange(day)) return;
       if (r.type === 'complete') {
@@ -5645,13 +5706,52 @@ function showBatchSupplement() {
 // 取任务的「完成时间」= 点击完成按钮时填的实际完成时间
 // 优先取 type:'complete' 记录（可被编辑同步），回退 task.completedAt；都没有则返回 ''
 function getTaskCompletionDT(task) {
-  const comps = (task.delayRecords || []).filter(r => r.type === 'complete');
+  if (!task) return '';
+  const recs = task.delayRecords || [];
+  const comps = recs.filter(r => r.type === 'complete');
   if (comps.length) {
     const sorted = [...comps].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     const last = sorted[sorted.length - 1];
     return toDT(last.completedAt || last.date || '');
   }
-  return toDT(task.completedAt || '');
+  if (task.completedAt) return toDT(task.completedAt);
+  // 没有「完成」记录但状态已是已完成（如通过编辑状态改为已完成）：
+  // 取最后一条指向「已完成」的状态变更时间作为完成时间
+  const statusRecs = recs.filter(r => r.type === 'status' && r.toStatus === '已完成');
+  if (statusRecs.length) {
+    const sorted = [...statusRecs].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    return toDT(sorted[sorted.length - 1].date || '');
+  }
+  return '';
+}
+
+// 完成任务后，晚于完成时间的延期 / 计划调整 / 状态变更记录会被「冻结」：
+// 不参与完成时间计算、也不在任何界面显示，但记录本身保留——
+// 撤销完成（改状态）、删除完成记录、或把完成时间改早时，会自动解除冻结补回。
+function syncCompletionFrozenRecords(task) {
+  if (!task) return 0;
+  const recs = task.delayRecords || [];
+  // 任务未完成、或取不到完成时间 → 全部解冻
+  const doneDT = task.status === '已完成' ? getTaskCompletionDT(task) : '';
+  if (!doneDT) {
+    let restored = 0;
+    recs.forEach(r => { if (r._frozen) { delete r._frozen; restored++; } });
+    return restored;
+  }
+  let changed = 0;
+  recs.forEach(r => {
+    if (r.type === 'complete') { if (r._frozen) { delete r._frozen; changed++; } return; }
+    // 'YYYY-MM-DD' 与 'YYYY-MM-DDTHH:mm' 可直接按字符串比较；当日发生的保留
+    const isAfter = (r.date || '') > doneDT;
+    if (isAfter && !r._frozen) { r._frozen = true; changed++; }
+    else if (!isAfter && r._frozen) { delete r._frozen; changed++; }
+  });
+  return changed;
+}
+
+// 有效记录 = 排除被冻结的（界面展示与统计一律用这个）
+function activeDelayRecords(task) {
+  return (task.delayRecords || []).filter(r => !r._frozen);
 }
 
 // 把 [startDT, nowDT] 区间内、「影响所有未完成任务」型的临时事项关联到指定任务
