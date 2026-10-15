@@ -555,6 +555,64 @@ tr:hover { background: var(--bg-light); }
     </div>
   </div>
 
+  <div class="card" style="margin-top:16px;">
+    <div class="card-header">
+      <span class="card-title">GitHub 数据同步</span>
+    </div>
+    <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+      把任务数据同步到私有仓库 <code>syabin/task-data</code> 的 <code>data/task-data.json</code>。若其他设备已改动远端文件，本次上传会<b>拒绝覆盖</b>并提示。
+    </p>
+    <div class="form-row">
+      <div class="form-group" style="min-width:150px;">
+        <label>仓库（owner/repo）</label>
+        <input type="text" id="ghRepo" value="syabin/task-data" autocomplete="off">
+      </div>
+      <div class="form-group" style="min-width:200px;">
+        <label>文件路径</label>
+        <input type="text" id="ghPath" value="data/task-data.json" autocomplete="off">
+      </div>
+      <div class="form-group" style="min-width:110px;">
+        <label>分支</label>
+        <input type="text" id="ghBranch" value="main" autocomplete="off">
+      </div>
+      <div class="form-group" style="min-width:190px;">
+        <label>附件路径</label>
+        <input type="text" id="ghAttPath" value="data/attachments" autocomplete="off">
+      </div>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text); white-space:nowrap;">
+          <input type="checkbox" id="ghSyncAttachments" checked onchange="ghSaveConfig()"> 同时上传 / 下载附件
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="min-width:300px;">
+        <label>访问令牌 (PAT)</label>
+        <input type="password" id="ghToken" placeholder="ghp_… 或 fine-grained token" autocomplete="off">
+      </div>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text); white-space:nowrap;">
+          <input type="checkbox" id="ghRemember" onchange="ghSaveConfig()"> 记住令牌（存本机浏览器）
+        </label>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      <button class="btn btn-outline" id="ghBtnTest" onclick="ghTestConn()">测试连接</button>
+      <button class="btn btn-primary" id="ghBtnUpload" onclick="ghUpload()">⬆ 上传到 GitHub</button>
+      <button class="btn btn-secondary" id="ghBtnPull" onclick="ghPull()">⬇ 从 GitHub 拉取</button>
+    </div>
+    <div id="ghStatus" style="font-size:12px; color:#666; min-height:18px;">尚未同步。</div>
+    <p style="font-size:11px; color:var(--text-muted); margin-top:10px;">
+      令牌准备：GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens，选中私有仓库 <code>task-data</code>，
+      勾选 <code>Contents: Read and write</code>。令牌仅保存在本机（默认不落盘，勾选「记住」才存），不会写进导出的数据文件。
+    </p>
+    <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+      附件同步：附件本体存到 <code data/attachments/&lt;事项ID&gt;/&lt;文件名&gt;</code>，数据文件只保留清单。上传需已授权本地存档目录；单附件上限 20MB，超限会跳过并在状态行提示。
+    </p>
+  </div>
+
 </div>
 
 <!-- Modal -->
@@ -1150,7 +1208,7 @@ function switchTab(name) {
   if (name === 'delays') renderDelayItems();
   if (name === 'heatmap') renderHeatmap();
   if (name === 'review') renderReview();
-  if (name === 'data') updateDataStatus();
+  if (name === 'data') { updateDataStatus(); ghLoadConfig(); }
 }
 
 // ====== Modal ======
@@ -4838,6 +4896,396 @@ function clearAllData() {
   saveData({ tasks: [], tempItems: [], holidays: [] });
   showToast("所有数据已清空");
   renderTasks();
+}
+
+// ====== GitHub 数据同步（Contents API） ======
+// 数据文件默认存于私有仓库 syabin/task-data 的 data/task-data.json。
+// 冲突策略：上传前比对上次同步记录的远端 sha，不一致即拒绝覆盖并提示（保护其他设备的改动）。
+const GH_CONFIG_KEY = 'tm-gh-config';
+const GH_TOKEN_KEY = 'tm-gh-token';
+const GH_SYNC_KEY = 'tm-gh-sync';
+const GH_API = 'https://api.github.com';
+let _ghTokenMemory = ''; // 未勾选「记住令牌」时仅存内存，刷新即失效
+
+function ghVal(id) { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+
+function ghConfig() {
+  const attBox = document.getElementById('ghSyncAttachments');
+  return {
+    repo: ghVal('ghRepo') || 'syabin/task-data',
+    path: ghVal('ghPath') || 'data/task-data.json',
+    branch: ghVal('ghBranch') || 'main',
+    attPath: ghVal('ghAttPath') || 'data/attachments',
+    syncAttachments: attBox ? attBox.checked : true
+  };
+}
+
+function ghSaveConfig() {
+  try {
+    localStorage.setItem(GH_CONFIG_KEY, JSON.stringify(ghConfig()));
+    const remember = document.getElementById('ghRemember') && document.getElementById('ghRemember').checked;
+    const typed = ghVal('ghToken');
+    if (remember && typed) { localStorage.setItem(GH_TOKEN_KEY, typed); _ghTokenMemory = ''; }
+    else { localStorage.removeItem(GH_TOKEN_KEY); _ghTokenMemory = typed; }
+  } catch (e) {}
+}
+
+function ghLoadConfig() {
+  let cfg = {};
+  try { cfg = JSON.parse(localStorage.getItem(GH_CONFIG_KEY) || '{}'); } catch (e) {}
+  const fill = (id, def) => { const el = document.getElementById(id); if (el) el.value = cfg[id] || def; };
+  fill('ghRepo', 'syabin/task-data');
+  fill('ghPath', 'data/task-data.json');
+  fill('ghBranch', 'main');
+  fill('ghAttPath', 'data/attachments');
+  const aBox = document.getElementById('ghSyncAttachments');
+  if (aBox) aBox.checked = cfg.syncAttachments !== false;
+  let tok = '';
+  try { tok = localStorage.getItem(GH_TOKEN_KEY) || ''; } catch (e) {}
+  const tEl = document.getElementById('ghToken');
+  if (tEl) tEl.value = tok;
+  const rEl = document.getElementById('ghRemember');
+  if (rEl) rEl.checked = !!tok;
+  updateGhStatus();
+}
+
+function ghGetToken() { return ghVal('ghToken') || _ghTokenMemory || ''; }
+function ghGetSync() { try { return JSON.parse(localStorage.getItem(GH_SYNC_KEY) || '{}'); } catch (e) { return {}; } }
+function ghSetSync(obj) { try { localStorage.setItem(GH_SYNC_KEY, JSON.stringify(obj)); } catch (e) {} }
+
+// 本地数据指纹：判断相对上次同步是否有改动（不依赖 crypto，file:// 下也可用）
+function ghLocalFingerprint() {
+  let raw = '';
+  try { raw = localStorage.getItem(STORAGE_KEY) || ''; } catch (e) {}
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
+  return h + ':' + raw.length;
+}
+
+function setGhStatus(html) {
+  const el = document.getElementById('ghStatus');
+  if (el) el.innerHTML = html;
+}
+
+function updateGhStatus() {
+  const sync = ghGetSync();
+  if (!sync.syncedAt) { setGhStatus('尚未同步。点击「⬆ 上传到 GitHub」建立首次同步。'); return; }
+  const dirty = sync.localHash !== ghLocalFingerprint();
+  const attNote = sync.att ? ' · ' + escAttr(sync.att) : '';
+  setGhStatus(`上次同步：${formatDate(sync.syncedAt)} · 远端 sha <code>${escAttr((sync.sha || '').slice(0, 7))}</code> · ` +
+    (dirty
+      ? '<span style="color:#f59e0b;font-weight:600;">本地有未同步改动</span>'
+      : '<span style="color:#198754;">本地与上次同步一致</span>') + attNote);
+}
+
+function setGhBusy(busy) {
+  ['ghBtnTest', 'ghBtnUpload', 'ghBtnPull'].forEach(function(id) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = busy;
+  });
+}
+
+// UTF-8 安全的 base64（中文/emoji 均可正确编解码）
+function ghB64Encode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function ghB64Decode(b64) {
+  const bytes = ghB64DecodeBytes(b64);
+  return new TextDecoder().decode(bytes);
+}
+
+// 二进制安全的 base64（附件本体用）：分块转换避免大文件卡死
+function ghB64EncodeBytes(bytes) {
+  const CH = 0x8000;
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bin = '';
+  for (let i = 0; i < arr.length; i += CH) {
+    bin += String.fromCharCode.apply(null, arr.subarray(i, i + CH));
+  }
+  return btoa(bin);
+}
+function ghB64DecodeBytes(b64) {
+  const bin = atob(String(b64 || '').replace(/\s/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function ghApi(method, url, body) {
+  const token = ghGetToken();
+  if (!token) throw new Error('NO_TOKEN');
+  const headers = {
+    'Authorization': 'Bearer ' + token,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
+  if (body) headers['Content-Type'] = 'application/json';
+  let resp;
+  try {
+    resp = await fetch(url, { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined });
+  } catch (e) {
+    const err = new Error('NETWORK'); err.detail = (e && e.message) || '网络请求失败'; throw err;
+  }
+  let json = null;
+  try { json = await resp.json(); } catch (e) {}
+  if (!resp.ok) {
+    const code = resp.status;
+    let msg = (json && json.message) || ('HTTP ' + code);
+    if (code === 401) msg = '令牌无效或已过期（401）';
+    else if (code === 403) msg = '权限不足或被限流（403）：私有仓库需对该仓库授予 Contents 读写权限';
+    else if (code === 404) msg = '仓库或文件不存在（404）：请检查仓库名与文件路径';
+    else if (code === 409) msg = '远端文件已存在且缺少 sha（409）';
+    else if (code === 422) msg = '提交被拒绝（422）：内容或分支有误';
+    const err = new Error(msg); err.status = code; throw err;
+  }
+  return json;
+}
+
+function ghFileUrl(cfg, query) {
+  return ghPathUrl(cfg, cfg.path, query);
+}
+
+// 任意仓库路径的 Contents API 地址（数据文件与附件共用）
+function ghPathUrl(cfg, path, query) {
+  const enc = String(path).split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  return `${GH_API}/repos/${cfg.repo}/contents/${enc}` + (query || '');
+}
+
+// 单个附件的仓库路径：<附件根>/<临时事项ID>/<文件名>
+function ghAttachmentPath(cfg, itemId, fileName) {
+  const root = String(cfg.attPath || 'data/attachments').replace(/\/+$/, '');
+  return `${root}/${itemId}/${fileName}`;
+}
+
+// 读取远端数据文件；不存在返回 null
+async function ghFetchRemote() {
+  const cfg = ghConfig();
+  const j = await ghApi('GET', ghFileUrl(cfg, '?ref=' + encodeURIComponent(cfg.branch)));
+  return { sha: j.sha, text: ghB64Decode(j.content || '') };
+}
+
+function handleGhError(e) {
+  if (e && e.message === 'NO_TOKEN') {
+    setGhStatus('<span style="color:#dc3545;">请先填写访问令牌 (PAT)。</span>');
+    showToast('请先填写访问令牌 (PAT)', 'error');
+    return;
+  }
+  if (e && e.message === 'NETWORK') {
+    setGhStatus(`<span style="color:#dc3545;">网络请求失败：${escAttr(e.detail || '')}（离线状态下无法同步）</span>`);
+    showToast('网络请求失败，无法同步', 'error');
+    return;
+  }
+  const msg = (e && e.message) || '未知错误';
+  setGhStatus(`<span style="color:#dc3545;">失败：${escAttr(msg)}</span>`);
+  showToast('同步失败：' + msg, 'error');
+}
+
+async function ghTestConn() {
+  ghSaveConfig();
+  const cfg = ghConfig();
+  setGhBusy(true);
+  setGhStatus('正在测试连接…');
+  try {
+    const repo = await ghApi('GET', `${GH_API}/repos/${cfg.repo}`);
+    let extra = '';
+    try {
+      const remote = await ghFetchRemote();
+      extra = `，数据文件 sha <code>${escAttr(remote.sha.slice(0, 7))}</code>`;
+    } catch (e) { if (e.status !== 404) throw e; extra = '，远端暂无数据文件'; }
+    setGhStatus(`<span style="color:#198754;">连接正常：${escAttr(repo.full_name)}（${repo.private ? '私有' : '公开'}）${extra}</span>`);
+    showToast('GitHub 连接正常');
+  } catch (e) {
+    handleGhError(e);
+  } finally { setGhBusy(false); }
+}
+
+// ====== 附件同步（附件本体随数据一起上/下） ======
+// 单附件上限 20MB：base64 膨胀约 1.37 倍，仍远低于 GitHub 单文件 100MB 限制
+const GH_MAX_ATTACHMENT = 20 * 1024 * 1024;
+
+// 读本地存档目录里的附件文件；不存在或未授权目录返回 null
+async function ghReadLocalAttachment(item, fileName) {
+  if (!_archiveHandle) return null;
+  try {
+    const subDir = await _archiveHandle.getDirectoryHandle(getArchiveDirName(item));
+    const fh = await subDir.getFileHandle(fileName);
+    return await fh.getFile();
+  } catch (e) { return null; }
+}
+
+// 覆盖写入本地存档目录
+async function ghWriteLocalAttachment(item, fileName, bytes) {
+  if (!_archiveHandle) return false;
+  try {
+    const subDir = await _getSubDirHandle(item);
+    if (!subDir) return false;
+    const fh = await subDir.getFileHandle(fileName, { create: true });
+    const w = await fh.createWritable();
+    await w.write(bytes);
+    await w.close();
+    return true;
+  } catch (e) {
+    console.error('写附件失败:', fileName, e);
+    return false;
+  }
+}
+
+async function ghUploadAttachments(cfg, data) {
+  const list = [];
+  (data.tempItems || []).forEach(item => {
+    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, size: a.size || 0 }));
+  });
+  if (!list.length) return { uploaded: 0, skipped: 0, total: 0, noHandle: false };
+  if (!hasArchivePath()) return { uploaded: 0, skipped: list.length, total: list.length, noHandle: true };
+
+  let uploaded = 0, skipped = 0;
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    setGhStatus(`正在上传附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
+    if (a.size > GH_MAX_ATTACHMENT) { skipped++; continue; }
+    const file = await ghReadLocalAttachment(a.item, a.name);
+    if (!file) { skipped++; continue; }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const p = ghAttachmentPath(cfg, a.item.id, a.name);
+      // 远端已存在则带 sha 做更新（否则 409/422）
+      let sha = null;
+      try {
+        const meta = await ghApi('GET', ghPathUrl(cfg, p, '?ref=' + encodeURIComponent(cfg.branch)));
+        sha = meta.sha;
+      } catch (e) { if (e.status !== 404) throw e; }
+      const body = {
+        message: 'chore(sync): 附件 ' + a.name,
+        content: ghB64EncodeBytes(bytes),
+        branch: cfg.branch
+      };
+      if (sha) body.sha = sha;
+      await ghApi('PUT', ghPathUrl(cfg, p), body);
+      uploaded++;
+    } catch (e) {
+      // 超出体积等限制时跳过，不中断整体同步
+      if (e.status === 422 || e.status === 409) { skipped++; continue; }
+      throw e;
+    }
+  }
+  return { uploaded, skipped, total: list.length, noHandle: false };
+}
+
+async function ghDownloadAttachments(cfg, data) {
+  const list = [];
+  (data.tempItems || []).forEach(item => {
+    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name }));
+  });
+  if (!list.length) return { saved: 0, missing: 0, total: 0, noHandle: false };
+  if (!hasArchivePath()) return { saved: 0, missing: list.length, total: list.length, noHandle: true };
+
+  let saved = 0, missing = 0;
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    setGhStatus(`正在下载附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
+    try {
+      const j = await ghApi('GET', ghPathUrl(cfg, ghAttachmentPath(cfg, a.item.id, a.name), '?ref=' + encodeURIComponent(cfg.branch)));
+      const bytes = ghB64DecodeBytes(j.content || '');
+      const ok = await ghWriteLocalAttachment(a.item, a.name, bytes);
+      if (ok) saved++; else missing++;
+    } catch (e) { missing++; }
+  }
+  return { saved, missing, total: list.length, noHandle: false };
+}
+
+async function ghUpload() {
+  const cfg = ghConfig();
+  if (!confirm(`确定把当前数据上传到 ${cfg.repo} 的 ${cfg.path}（分支 ${cfg.branch}）？`)) return;
+  ghSaveConfig();
+  setGhBusy(true);
+  setGhStatus('正在检查远端状态…');
+  try {
+    let remote = null;
+    try { remote = await ghFetchRemote(); }
+    catch (e) { if (e.status !== 404) throw e; }
+
+    const sync = ghGetSync();
+    if (remote && sync.sha && sync.sha !== remote.sha) {
+      // 冲突：远端已被其他设备改动 → 拒绝覆盖
+      setGhStatus('<span style="color:#dc3545;font-weight:600;">检测到冲突，已拒绝覆盖（远端已被其他设备改动）</span>');
+      alert('检测到冲突，已拒绝覆盖。\n\n' +
+        '本机上次同步的远端 sha：' + (sync.sha || '').slice(0, 7) + '\n' +
+        '远端当前 sha：' + remote.sha.slice(0, 7) + '\n\n' +
+        '为避免丢失其他设备的改动，本次上传已取消。\n建议先「⬇ 从 GitHub 拉取」查看远端内容，再决定如何处理。');
+      return;
+    }
+    if (remote && !sync.sha) {
+      const ok = confirm('远端已存在数据文件，但本机没有同步记录（可能由其他设备上传）。\n继续将用本地数据覆盖远端，确定吗？');
+      if (!ok) return;
+    } else if (!remote && sync.sha) {
+      const ok = confirm('远端数据文件已不存在（可能被删除），将重新创建。确定吗？');
+      if (!ok) return;
+    }
+
+    setGhStatus('正在上传…');
+    const body = {
+      message: 'chore(sync): 更新任务数据 ' + new Date().toLocaleString('zh-CN'),
+      content: ghB64Encode(JSON.stringify(loadData(), null, 2)),
+      branch: cfg.branch
+    };
+    if (remote) body.sha = remote.sha; // 更新已有文件必须带当前 sha
+    const res = await ghApi('PUT', ghFileUrl(cfg), body);
+    const newSha = (res.content && res.content.sha) || remote.sha;
+    let attNote = '';
+    if (cfg.syncAttachments) {
+      const att = await ghUploadAttachments(cfg, loadData());
+      attNote = att.noHandle
+        ? '附件未上传（未授权存档目录）'
+        : `附件 ${att.uploaded}/${att.total}${att.skipped ? `（跳过 ${att.skipped}）` : ''}`;
+    }
+    ghSetSync({ sha: newSha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote });
+    setGhStatus('<span style="color:#198754;">上传成功，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
+    showToast('已上传到 GitHub' + (cfg.syncAttachments ? '（含附件）' : ''));
+    updateGhStatus();
+  } catch (e) {
+    handleGhError(e);
+  } finally { setGhBusy(false); }
+}
+
+async function ghPull() {
+  const cfg = ghConfig();
+  if (!confirm(`从 ${cfg.repo} 的 ${cfg.path} 拉取并覆盖本地数据？\n覆盖后可用顶部「↩ 撤回」恢复。`)) return;
+  ghSaveConfig();
+  setGhBusy(true);
+  setGhStatus('正在拉取远端数据…');
+  try {
+    let remote = null;
+    try { remote = await ghFetchRemote(); }
+    catch (e) {
+      if (e.status === 404) throw new Error('远端还没有数据文件，请先上传或先在 GitHub 上创建该文件');
+      throw e;
+    }
+    let obj;
+    try { obj = JSON.parse(remote.text); }
+    catch (e) { throw new Error('远端文件不是合法 JSON，已中止覆盖'); }
+    if (!obj || !Array.isArray(obj.tasks)) throw new Error('远端文件结构异常（缺少 tasks 数组），已中止覆盖');
+    saveData(obj); // 经 saveData 写入，落在撤回栈内，可撤回
+    let attNote = '';
+    if (cfg.syncAttachments) {
+      const att = await ghDownloadAttachments(cfg, obj);
+      attNote = att.noHandle
+        ? '附件未还原：未设置存档路径（设置后重新拉取即可）'
+        : `附件还原 ${att.saved}/${att.total}${att.missing ? `（缺失 ${att.missing}）` : ''}`;
+    }
+    ghSetSync({ sha: remote.sha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote });
+    setGhStatus('<span style="color:#198754;">拉取成功，本地数据已替换（可点顶部「撤回」恢复） · ' + escAttr(attNote || '不含附件') + '</span>');
+    showToast('已从 GitHub 拉取并覆盖本地数据');
+    updateDataStatus();
+    renderTasks();
+    renderTempItems();
+    renderDeliveryItems();
+    renderReview();
+  } catch (e) {
+    handleGhError(e);
+  } finally { setGhBusy(false); }
 }
 
 // ====== Batch Import ======
