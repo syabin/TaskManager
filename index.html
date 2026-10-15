@@ -1367,6 +1367,13 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ====== Task Management ======
+// 延期适用性：只有「进行中」「已延期」参与顺延。
+// 排除「已完成」（终态，完成时间冻结）、「暂停」（暂停期间冻结）、「未开始」（尚未进入执行，不顺延）。
+function isDelayAffectable(task) {
+  if (!task) return false;
+  return task.status !== '已完成' && task.status !== '暂停' && task.status !== '未开始';
+}
+
 function showTaskForm(taskId, projectName, projectTitle) {
   const data = loadData();
   const task = taskId ? data.tasks.find(t => t.id === taskId) : null;
@@ -2152,8 +2159,8 @@ function showTempForm(tempId, forcePlanned) {
   const title = item ? (isExpected ? '编辑预期事件' : '编辑临时事项') : (isExpected ? '新建预期事件' : '新建临时事项');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
-  const taskCheckboxes = incompleteTasks.map(t => t.status === '暂停'
-    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="temp-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+  const taskCheckboxes = incompleteTasks.map(t => !isDelayAffectable(t)
+    ? `<label style="opacity:.55;" title="${t.status === '暂停' ? '暂停期间不计延期' : '未开始的任务不参与顺延'}"><input type="checkbox" value="${t.id}" class="temp-task-cb" disabled>[${t.projectName}] ${t.taskName}（${t.status === '暂停' ? '已暂停，期间不计延期' : '未开始，暂不计延期'}）</label>`
     : `<label><input type="checkbox" value="${t.id}" class="temp-task-cb" ${item && item.affectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
 
@@ -2222,7 +2229,7 @@ function showTempForm(tempId, forcePlanned) {
       <div class="form-group">
         <label>影响范围</label>
         <select id="mTempImpactType" onchange="toggleTempTaskSelect()">
-          <option value="all" ${item && item.impactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
+          <option value="all" ${item && item.impactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含未开始 / 已暂停）</option>
           <option value="specific" ${item && item.impactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -2550,19 +2557,24 @@ try {
     affectedTaskIds = [...document.querySelectorAll('.temp-task-cb:checked')].map(cb => cb.value);
     if (affectedTaskIds.length === 0) { showToast('请至少选择一个任务', 'error'); return; }
   } else {
-    // 「影响所有任务」不含暂停中的任务：暂停期间不记延期
-    affectedTaskIds = data.tasks.filter(t => t.status !== '已完成' && t.status !== '暂停').map(t => t.id);
+    // 「影响所有任务」不含未开始 / 暂停 / 已完成的任务：这些任务不参与顺延
+    affectedTaskIds = data.tasks.filter(isDelayAffectable).map(t => t.id);
   }
 
   if (tempId) {
     const oldItem = data.tempItems.find(t => t.id === tempId);
     if (oldItem) {
-      const removedTaskIds = oldItem.affectedTaskIds.filter(tid => !affectedTaskIds.includes(tid));
+      // 移除清单中排除「不参与延期」的任务：它们的历史延期记录不应被本次编辑误清（任务已删除则照常清理）
+      const removedTaskIds = oldItem.affectedTaskIds.filter(tid => {
+        if (affectedTaskIds.includes(tid)) return false;
+        const t = data.tasks.find(x => x.id === tid);
+        return t ? isDelayAffectable(t) : true;
+      });
       // 转为预期事件时，清除该事项已生成的全部延期记录
       const clearTargets = status === 'planned' ? oldItem.affectedTaskIds.slice() : removedTaskIds;
       clearTargets.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task && task.status !== '暂停') {
+        if (task && isDelayAffectable(task)) {
           task.delayRecords = task.delayRecords.filter(r => r.causedByTempItemId !== tempId);
           recalcTaskEndDate(task);
         }
@@ -2570,7 +2582,7 @@ try {
 
       if (status === 'done') affectedTaskIds.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task && task.status !== '暂停') {
+        if (task && isDelayAffectable(task)) {
           let existingRecord = task.delayRecords.find(r => r.causedByTempItemId === tempId);
           if (existingRecord) {
             existingRecord.delayHours = delayHours;
@@ -2636,7 +2648,7 @@ try {
     if (status === 'done') {
       affectedTaskIds.forEach(tid => {
         const task = data.tasks.find(t => t.id === tid);
-        if (task && task.status !== '暂停') {
+        if (task && isDelayAffectable(task)) {
           task.delayRecords.push({
             id: genId(),
             date,
@@ -3048,12 +3060,12 @@ function showDeliveryForm(deliveryId, forcePlanned) {
   const title = item ? (isExpected ? '编辑预期交付件' : '编辑交付件更新') : (isExpected ? '新建预期交付件' : '新建交付件更新');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
-  const blockCheckboxes = incompleteTasks.map(t => t.status === '暂停'
-    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+  const blockCheckboxes = incompleteTasks.map(t => !isDelayAffectable(t)
+    ? `<label style="opacity:.55;" title="${t.status === '暂停' ? '暂停期间不计延期' : '未开始的任务不参与顺延'}"><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" disabled>[${t.projectName}] ${t.taskName}（${t.status === '暂停' ? '已暂停，期间不计延期' : '未开始，暂不计延期'}）</label>`
     : `<label><input type="checkbox" value="${t.id}" class="delivery-block-task-cb" ${item && item.blockAffectedTaskIds && item.blockAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
-  const processCheckboxes = incompleteTasks.map(t => t.status === '暂停'
-    ? `<label style="opacity:.55;"><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" disabled>[${t.projectName}] ${t.taskName}（已暂停，期间不计延期）</label>`
+  const processCheckboxes = incompleteTasks.map(t => !isDelayAffectable(t)
+    ? `<label style="opacity:.55;" title="${t.status === '暂停' ? '暂停期间不计延期' : '未开始的任务不参与顺延'}"><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" disabled>[${t.projectName}] ${t.taskName}（${t.status === '暂停' ? '已暂停，期间不计延期' : '未开始，暂不计延期'}）</label>`
     : `<label><input type="checkbox" value="${t.id}" class="delivery-process-task-cb" ${item && item.processAffectedTaskIds && item.processAffectedTaskIds.includes(t.id) ? 'checked' : ''}>[${t.projectName}] ${t.taskName}</label>`
   ).join('');
 
@@ -3126,7 +3138,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
       <div class="form-group">
         <select id="mDeliveryBlockImpactType" onchange="toggleDeliveryBlockTaskSelect()">
           <option value="none" ${item && item.blockImpactType === 'none' ? 'selected' : ''}>无</option>
-          <option value="all" ${item && item.blockImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
+          <option value="all" ${item && item.blockImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含未开始 / 已暂停）</option>
           <option value="specific" ${item && item.blockImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -3144,7 +3156,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
       <div class="form-group">
         <select id="mDeliveryProcessImpactType" onchange="toggleDeliveryProcessTaskSelect()">
           <option value="none" ${item && item.processImpactType === 'none' ? 'selected' : ''}>无</option>
-          <option value="all" ${item && item.processImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含已暂停）</option>
+          <option value="all" ${item && item.processImpactType === 'all' ? 'selected' : ''}>所有未完成任务顺延（不含未开始 / 已暂停）</option>
           <option value="specific" ${item && item.processImpactType === 'specific' ? 'selected' : ''}>指定任务顺延</option>
         </select>
       </div>
@@ -3207,8 +3219,8 @@ function collectDeliveryAffectedTasks(impactType, checkboxClass, data) {
     if (ids.length === 0) return null; // signal validation error
     return ids;
   }
-  // 「影响所有任务」不含暂停中的任务：暂停期间不记延期
-  return data.tasks.filter(t => t.status !== '已完成' && t.status !== '暂停').map(t => t.id);
+  // 「影响所有任务」不含未开始 / 暂停 / 已完成的任务：这些任务不参与顺延
+  return data.tasks.filter(isDelayAffectable).map(t => t.id);
 }
 
 async function saveDeliveryItem(deliveryId) {
@@ -3249,8 +3261,8 @@ try {
   const allAffectedTaskIds = Array.from(new Set([...blockAffectedTaskIds, ...processAffectedTaskIds]));
 
   function applyDeliveryRecordsToTask(task, itemId, createdAt) {
-    // 暂停中的任务：不新增/不清除延期记录，完成时间保持冻结
-    if (task.status === '暂停') return;
+    // 不参与延期的任务（未开始 / 暂停 / 已完成）：不动其记录，完成时间保持冻结
+    if (!isDelayAffectable(task)) return;
     // Remove old records from this delivery item for this task
     task.delayRecords = task.delayRecords.filter(r => r.causedByDeliveryItemId !== itemId);
     // Add block effect record
@@ -3908,7 +3920,7 @@ function getTempItemDelayHours(item) {
 
 function getTempItemAffectedTasks(item, tasks) {
   if (!item) return [];
-  if (item.impactType === 'all') return tasks.filter(t => t.status !== '已完成');
+  if (item.impactType === 'all') return tasks.filter(isDelayAffectable);
   return tasks.filter(t => item.affectedTaskIds && item.affectedTaskIds.includes(t.id));
 }
 
@@ -3927,7 +3939,7 @@ function getDeliveryItemAffectedTasks(item, tasks) {
   ]));
   if (allIds.length > 0) return tasks.filter(t => allIds.includes(t.id));
   if (item.blockImpactType === 'all' || item.processImpactType === 'all' || item.impactType === 'all') {
-    return tasks.filter(t => t.status !== '已完成');
+    return tasks.filter(isDelayAffectable);
   }
   return [];
 }
