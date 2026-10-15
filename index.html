@@ -537,6 +537,10 @@ tr:hover { background: var(--bg-light); }
       <button class="btn btn-outline btn-sm" onclick="reauthorizeArchivePath()" id="btnReauthorize" style="display:none;">重新授权</button>
     </div>
     <p style="font-size:12px; color:var(--text-muted); margin-top:8px;">选择本地文件夹后，创建临时事项时可添加附件，自动归档到 <code>&lt;日期&gt;_&lt;ID&gt;</code> 子文件夹中。</p>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+      <button class="btn btn-outline btn-sm" id="btnArchiveRepair" onclick="ghScanArchiveIssues()">检查并修复附件目录</button>
+    </div>
+    <div id="archiveRepairResult" style="font-size:12px; margin-top:8px;"></div>
   </div>
   <div class="card" style="margin-top:16px;">
     <div class="card-header">
@@ -1052,7 +1056,7 @@ async function openAttachment(item, filename) {
     window.open(url, '_blank');
     setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
   } catch (e) {
-    showToast('无法打开文件: ' + e.message, 'error');
+    showToast('打不开文件（可能已被改名、移动或删除）。可在「数据管理 → 检查并修复附件目录」查看诊断', 'error');
   }
 }
 
@@ -4985,6 +4989,145 @@ function clearAllData() {
   saveData({ tasks: [], tempItems: [], holidays: [] });
   showToast("所有数据已清空");
   renderTasks();
+}
+
+// ====== 附件目录体检与修复 ======
+// 目录名是 {事项日期}_{事项ID}，事项日期改过之后名字就对不上，附件会被判为「找不到」。
+// 这里扫描全部事项：把「名字不一致」的目录统一改回标准名（优先 rename，不支持则复制），并报告文件缺失。
+var _archiveIssues = { dirs: [], files: [] };
+
+async function ghRenameArchiveDir(oldHandle, newName) {
+  // 首选真正的改名（FileSystemDirectoryHandle.move）
+  if (typeof oldHandle.move === 'function') {
+    try { await oldHandle.move(newName); return 'renamed'; } catch (e) { /* 落到复制方案 */ }
+  }
+  // 降级：把文件复制到标准目录（旧目录保留，由用户自行清理）
+  const newHandle = await _archiveHandle.getDirectoryHandle(newName, { create: true });
+  for await (const fh of oldHandle.values()) {
+    if (fh.kind !== 'file') continue;
+    const file = await fh.getFile();
+    const target = await newHandle.getFileHandle(fh.name, { create: true });
+    const w = await target.createWritable();
+    await w.write(file);
+    await w.close();
+  }
+  return 'copied';
+}
+
+async function ghScanArchiveIssues() {
+  if (!hasArchivePath()) { showToast('请先设置存档路径', 'error'); return; }
+  const box = document.getElementById('archiveRepairResult');
+  if (box) box.innerHTML = '<span style="color:var(--text-secondary);">正在检查附件目录…</span>';
+  const data = loadData();
+  const entries = [];
+  (data.tempItems || []).forEach(i => entries.push({ item: i, kind: 'temp' }));
+  (data.deliveryItems || []).forEach(i => entries.push({ item: i, kind: 'delivery' }));
+
+  const dirs = [], files = [];
+  let checked = 0;
+  for (const e of entries) {
+    const atts = e.item.attachments || [];
+    if (!atts.length) continue;
+    checked++;
+    const standard = getArchiveDirName(e.item);
+    const suffix = '_' + e.item.id;
+    let dir = null;
+    let dirNameUsed = standard; // 实际命中的目录名（不依赖 handle.name）
+    try {
+      dir = await _archiveHandle.getDirectoryHandle(standard);
+    } catch (err) {
+      try {
+        const it = _archiveHandle.entries();
+        let n = await it.next();
+        while (!n.done) {
+          const name = n.value[0], handle = n.value[1];
+          if (handle && handle.kind === 'directory' && name.slice(-suffix.length) === suffix) {
+            dir = handle; dirNameUsed = name; break;
+          }
+          n = await it.next();
+        }
+      } catch (err2) {}
+    }
+    if (!dir) {
+      files.push({ label: e.item.description || e.item.id, kind: e.kind, names: atts.map(a => a.name), actual: [], dirGone: true });
+      continue;
+    }
+    if (dirNameUsed !== standard) dirs.push({ item: e.item, kind: e.kind, oldName: dirNameUsed, newName: standard });
+    let actual = [];
+    try {
+      for await (const fh of dir.values()) { if (fh.kind === 'file') actual.push(fh.name); }
+    } catch (err3) {}
+    const missing = atts.filter(a => !actual.includes(a.name));
+    if (missing.length) files.push({ label: e.item.description || e.item.id, kind: e.kind, names: missing.map(a => a.name), actual: actual });
+  }
+
+  _archiveIssues = { dirs: dirs, files: files };
+  renderArchiveRepairResult();
+  showToast(dirs.length || files.length ? `检查完成：${dirs.length} 个目录名待修复，${files.length} 个事项有附件缺失` : '检查完成：一切正常');
+}
+
+function renderArchiveRepairResult() {
+  const box = document.getElementById('archiveRepairResult');
+  if (!box) return;
+  const dirs = _archiveIssues.dirs || [];
+  const files = _archiveIssues.files || [];
+  if (!dirs.length && !files.length) {
+    box.innerHTML = '<span style="color:#198754;">附件目录全部正常，无需修复。</span>';
+    return;
+  }
+  let html = '';
+  if (dirs.length) {
+    html += `<div style="margin-bottom:10px; padding:8px 10px; background:var(--warning-bg); border-radius:6px;">
+      <div style="font-weight:600; color:#856404; margin-bottom:6px;">${dirs.length} 个目录名与事项日期不一致（附件仍在旧目录中）</div>
+      <div style="max-height:150px; overflow-y:auto; font-size:12px; color:#666;">
+        ${dirs.map(d => `<div>「${escAttr((d.item.description || d.item.id).slice(0, 20))}」<br><code>${escAttr(d.oldName)}</code> → <code>${escAttr(d.newName)}</code></div>`).join('')}
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="ghRepairAllArchiveDirs()">一键修复为标准目录名</button>
+    </div>`;
+  }
+  if (files.length) {
+    html += `<div style="padding:8px 10px; background:#f8d7da; border-radius:6px;">
+      <div style="font-weight:600; color:#842029; margin-bottom:6px;">${files.length} 个事项存在附件文件缺失（改名 / 移动 / 已删除，自动修复不了）</div>
+      <div style="max-height:150px; overflow-y:auto; font-size:12px; color:#666;">
+        ${files.map(f => `<div>「${escAttr(String(f.label).slice(0, 20))}」缺失：${escAttr(f.names.join('、'))}${f.dirGone ? '（整个目录都不存在）' : (f.actual.length ? `<br>目录内现有：${escAttr(f.actual.join('、'))}` : '')}</div>`).join('')}
+      </div>
+    </div>`;
+  }
+  box.innerHTML = html;
+}
+
+async function ghRepairAllArchiveDirs() {
+  const dirs = _archiveIssues.dirs || [];
+  if (!dirs.length) return;
+  if (!confirm(`确定把 ${dirs.length} 个附件目录改名为标准名？\n（只改文件夹名字，附件内容不动）`)) return;
+  const box = document.getElementById('archiveRepairResult');
+  let ok = 0, fail = 0, copied = 0;
+  for (let i = 0; i < dirs.length; i++) {
+    const d = dirs[i];
+    if (box) box.innerHTML = `<span style="color:var(--text-secondary);">正在修复 ${i + 1}/${dirs.length}…</span>`;
+    const suffix = '_' + d.item.id;
+    try {
+      let handle = null;
+      try { handle = await _archiveHandle.getDirectoryHandle(d.oldName); } catch (e) {}
+      if (!handle) {
+        const it = _archiveHandle.entries();
+        let n = await it.next();
+        while (!n.done) {
+          const name = n.value[0], h = n.value[1];
+          if (h && h.kind === 'directory' && name.slice(-suffix.length) === suffix) { handle = h; break; }
+          n = await it.next();
+        }
+      }
+      if (!handle) { fail++; continue; }
+      const how = await ghRenameArchiveDir(handle, d.newName);
+      if (how === 'copied') copied++; else ok++;
+    } catch (e) {
+      console.error('修复失败:', d.oldName, e);
+      fail++;
+    }
+  }
+  await ghScanArchiveIssues();
+  showToast(`修复完成：改名 ${ok} 个${copied ? `，复制 ${copied} 个` : ''}${fail ? `，失败 ${fail} 个` : ''}`);
 }
 
 // ====== GitHub 数据同步（Contents API） ======
