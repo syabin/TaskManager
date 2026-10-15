@@ -5169,6 +5169,40 @@ async function ghTestConn() {
 // 单附件上限 20MB：base64 膨胀约 1.37 倍，仍远低于 GitHub 单文件 100MB 限制
 const GH_MAX_ATTACHMENT = 20 * 1024 * 1024;
 
+// 计算 Git blob sha（= sha1("blob " + 字节数 + \0 + 内容)），
+// 与 GitHub Trees API 返回的 sha 完全一致 → 可用于增量判断「远端是否已是最新」
+async function ghBlobSha(bytes) {
+  try {
+    const header = new TextEncoder().encode('blob ' + bytes.length + '\0');
+    const buf = new Uint8Array(header.length + bytes.length);
+    buf.set(header, 0); buf.set(bytes, header.length);
+    const digest = await crypto.subtle.digest('SHA-1', buf);
+    let out = '';
+    const d = new Uint8Array(digest);
+    for (let i = 0; i < d.length; i++) out += d[i].toString(16).padStart(2, '0');
+    return out;
+  } catch (e) { return null; } // 非安全上下文等 → 降级为全量上传
+}
+
+// 一次请求列出远端附件清单（path -> blob sha）；truncated 时返回 null 表示需降级
+async function ghListRemoteAttachments(cfg) {
+  const root = String(cfg.attPath || 'data/attachments').replace(/^\/+|\/+$/g, '');
+  if (!root) return null;
+  let tree;
+  try {
+    tree = await ghApi('GET', `${GH_API}/repos/${cfg.repo}/git/trees/${encodeURIComponent(cfg.branch)}?recursive=1`);
+  } catch (e) {
+    if (e.status === 404 || e.status === 409) return {}; // 空仓库 / 无内容
+    throw e;
+  }
+  if (tree.truncated) return null; // 树被截断，结果不可信 → 降级
+  const map = {};
+  (tree.tree || []).forEach(n => {
+    if (n.type === 'blob' && n.path && n.path.indexOf(root + '/') === 0) map[n.path] = n.sha;
+  });
+  return map;
+}
+
 // 读本地存档目录里的附件文件；返回 { file, reason }，reason 用于告知跳过原因
 async function ghReadLocalAttachment(item, fileName) {
   if (!_archiveHandle) return { file: null, reason: '未授权存档目录' };
@@ -5217,82 +5251,103 @@ async function ghUploadAttachments(cfg, data) {
   (data.deliveryItems || []).forEach(item => {
     (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, size: a.size || 0, kind: 'delivery' }));
   });
-  if (!list.length) return { uploaded: 0, skipped: 0, total: 0, noHandle: false, details: [] };
-  if (!hasArchivePath()) return { uploaded: 0, skipped: list.length, total: list.length, noHandle: true, details: [] };
+  const empty = { uploaded: 0, unchanged: 0, skipped: 0, total: 0, noHandle: false, details: [], orphan: 0 };
+  if (!list.length) return empty;
+  if (!hasArchivePath()) return Object.assign({}, empty, { skipped: list.length, total: list.length, noHandle: true });
 
-  let uploaded = 0, skipped = 0;
+  // 增量：先取一次远端附件清单（path -> blob sha），内容一致的直接跳过，不再重传
+  let remoteMap = null;
+  try { remoteMap = await ghListRemoteAttachments(cfg); }
+  catch (e) { setGhStatus('远端附件清单获取失败，将逐个比对（较慢）：' + escAttr(e.message)); }
+  const localPaths = {};
+  list.forEach(a => { localPaths[ghAttachmentPath(cfg, a.item.id, a.name, a.kind)] = true; });
+  const orphan = remoteMap ? Object.keys(remoteMap).filter(p => !localPaths[p]).length : 0;
+
+  let uploaded = 0, unchanged = 0, skipped = 0;
   const details = [];
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
-    setGhStatus(`正在上传附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
+    const label = `${a.name}（${escAttr((a.item.description || '未命名事项').slice(0, 16))}）`;
     if (a.size > GH_MAX_ATTACHMENT) {
       skipped++;
-      details.push(`${a.name}（${escAttr((a.item.description || '未命名事项').slice(0, 16))}）：超过 ${Math.round(GH_MAX_ATTACHMENT / 1048576)}MB 上限（${(a.size / 1048576).toFixed(1)}MB）`);
+      details.push(`${label}：超过 ${Math.round(GH_MAX_ATTACHMENT / 1048576)}MB 上限（${(a.size / 1048576).toFixed(1)}MB）`);
       continue;
     }
     const r = await ghReadLocalAttachment(a.item, a.name);
     if (!r.file) {
       skipped++;
-      details.push(`${a.name}（${escAttr((a.item.description || '未命名事项').slice(0, 16))}）：${r.reason}`);
+      details.push(`${label}：${r.reason}`);
       continue;
     }
     try {
+      setGhStatus(`正在处理附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
       const bytes = new Uint8Array(await r.file.arrayBuffer());
       const p = ghAttachmentPath(cfg, a.item.id, a.name, a.kind);
-      // 远端已存在则带 sha 做更新（否则 409/422）
-      let sha = null;
-      try {
-        const meta = await ghApi('GET', ghPathUrl(cfg, p, '?ref=' + encodeURIComponent(cfg.branch)));
-        sha = meta.sha;
-      } catch (e) { if (e.status !== 404) throw e; }
+      const localSha = await ghBlobSha(bytes);
+      // 远端 sha：优先用清单；清单不可用时逐个 GET（降级路径）
+      let remoteSha = null;
+      if (remoteMap) remoteSha = remoteMap[p] || null;
+      else {
+        try {
+          const meta = await ghApi('GET', ghPathUrl(cfg, p, '?ref=' + encodeURIComponent(cfg.branch)));
+          remoteSha = meta.sha;
+        } catch (e) { if (e.status !== 404) throw e; }
+      }
+      // 内容完全一致 → 远端已是最新，不重复上传
+      if (localSha && remoteSha && localSha === remoteSha) { unchanged++; continue; }
       const body = {
         message: 'chore(sync): 附件 ' + a.name,
         content: ghB64EncodeBytes(bytes),
         branch: cfg.branch
       };
-      if (sha) body.sha = sha;
+      if (remoteSha) body.sha = remoteSha;
       await ghApi('PUT', ghPathUrl(cfg, p), body);
       uploaded++;
     } catch (e) {
       // 超出体积等限制时跳过，不中断整体同步
       if (e.status === 422 || e.status === 409) {
         skipped++;
-        details.push(`${a.name}（${escAttr((a.item.description || '未命名事项').slice(0, 16))}）：远端拒绝（${e.message}）`);
+        details.push(`${label}：远端拒绝（${e.message}）`);
         continue;
       }
       throw e;
     }
   }
-  return { uploaded, skipped, total: list.length, noHandle: false, details };
+  return { uploaded, unchanged, skipped, total: list.length, noHandle: false, details, orphan };
 }
 
 async function ghDownloadAttachments(cfg, data) {
   const list = [];
   (data.tempItems || []).forEach(item => {
-    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, kind: 'temp' }));
+    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, size: a.size || 0, kind: 'temp' }));
   });
   (data.deliveryItems || []).forEach(item => {
-    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, kind: 'delivery' }));
+    (item.attachments || []).forEach(a => list.push({ item: item, name: a.name, size: a.size || 0, kind: 'delivery' }));
   });
-  if (!list.length) return { saved: 0, missing: 0, total: 0, noHandle: false, details: [] };
-  if (!hasArchivePath()) return { saved: 0, missing: list.length, total: list.length, noHandle: true, details: [] };
+  const empty = { saved: 0, unchanged: 0, missing: 0, total: 0, noHandle: false, details: [] };
+  if (!list.length) return empty;
+  if (!hasArchivePath()) return Object.assign({}, empty, { missing: list.length, total: list.length, noHandle: true });
 
-  let saved = 0, missing = 0;
+  let saved = 0, unchanged = 0, missing = 0;
   const details = [];
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
+    const label = `${a.name}（${escAttr((a.item.description || '未命名事项').slice(0, 16))}）`;
+    // 增量：本地已有且大小一致 → 不重复下载
+    const r = await ghReadLocalAttachment(a.item, a.name);
+    if (r.file && (!a.size || r.file.size === a.size)) { unchanged++; continue; }
     setGhStatus(`正在下载附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
     try {
       const j = await ghApi('GET', ghPathUrl(cfg, ghAttachmentPath(cfg, a.item.id, a.name, a.kind), '?ref=' + encodeURIComponent(cfg.branch)));
       const bytes = ghB64DecodeBytes(j.content || '');
       const ok = await ghWriteLocalAttachment(a.item, a.name, bytes);
-      if (ok) saved++; else { missing++; details.push(`${a.name}：写入本地失败`); }
+      if (ok) saved++; else { missing++; details.push(`${label}：写入本地失败`); }
     } catch (e) {
       missing++;
-      details.push(`${a.name}：远端不存在或读取失败`);
+      details.push(`${label}：远端不存在或读取失败`);
     }
   }
-  return { saved, missing, total: list.length, noHandle: false, details };
+  return { saved, unchanged, missing, total: list.length, noHandle: false, details };
 }
 
 async function ghUpload() {
@@ -5336,10 +5391,20 @@ async function ghUpload() {
     let attNote = '', attDetails = '';
     if (cfg.syncAttachments) {
       const att = await ghUploadAttachments(cfg, loadData());
-      attNote = att.noHandle
-        ? '附件未上传（未授权存档目录）'
-        : `附件 ${att.uploaded}/${att.total}${att.skipped ? `（跳过 ${att.skipped}）` : ''}`;
-      attDetails = (att.details || []).join('\n');
+      if (att.noHandle) {
+        attNote = '附件未上传（未授权存档目录）';
+      } else {
+        const parts = [];
+        if (att.uploaded > 0) parts.push(`上传/更新 ${att.uploaded}`);
+        if (att.unchanged > 0) parts.push(`已是最新 ${att.unchanged}`);
+        if (att.skipped > 0) parts.push(`跳过 ${att.skipped}`);
+        attNote = '附件 ' + (parts.join(' · ') || '无附件');
+        attDetails = (att.details || []).join('\n');
+        if (att.orphan > 0) {
+          attNote += `（远端另有 ${att.orphan} 个本地已不存在的附件，未自动删除）`;
+          attDetails = (attDetails ? attDetails + '\n' : '') + `远端多出 ${att.orphan} 个附件（本地已删除，仓库里仍保留）`;
+        }
+      }
     }
     ghSetSync({ sha: newSha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote, attDetails: attDetails });
     setGhStatus('<span style="color:#198754;">上传成功，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
@@ -5371,10 +5436,16 @@ async function ghPull() {
     let attNote = '', attDetails = '';
     if (cfg.syncAttachments) {
       const att = await ghDownloadAttachments(cfg, obj);
-      attNote = att.noHandle
-        ? '附件未还原：未设置存档路径（设置后重新拉取即可）'
-        : `附件还原 ${att.saved}/${att.total}${att.missing ? `（缺失 ${att.missing}）` : ''}`;
-      attDetails = (att.details || []).join('\n');
+      if (att.noHandle) {
+        attNote = '附件未还原：未设置存档路径（设置后重新拉取即可）';
+      } else {
+        const parts = [];
+        if (att.saved > 0) parts.push(`下载 ${att.saved}`);
+        if (att.unchanged > 0) parts.push(`本地已有 ${att.unchanged}`);
+        if (att.missing > 0) parts.push(`缺失 ${att.missing}`);
+        attNote = '附件 ' + (parts.join(' · ') || '无附件');
+        attDetails = (att.details || []).join('\n');
+      }
     }
     ghSetSync({ sha: remote.sha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote, attDetails: attDetails });
     setGhStatus('<span style="color:#198754;">拉取成功，本地数据已替换（可点顶部「撤回」恢复） · ' + escAttr(attNote || '不含附件') + '</span>');
