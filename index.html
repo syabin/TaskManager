@@ -49,8 +49,45 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tab-btn { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 3px solid transparent; transition: all 0.2s; }
 .tab-btn:hover { color: var(--primary); }
 .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
-.tab-content { display: none; flex: 1; min-height: 0; padding: 0 24px 24px; width: 100%; overflow: hidden; flex-direction: column; }
+.tab-content { display: none; flex: 1; min-height: 0; padding: 0 24px 24px calc(var(--nav-w, 250px) + 24px); width: 100%; overflow: hidden; flex-direction: column; }
 .tab-content.active { display: flex; }
+/* ====== 左侧项目导航（可折叠 + 拖拽排序） ====== */
+.proj-nav {
+  position: fixed; left: 0; top: var(--nav-top, 92px); bottom: 0; width: var(--nav-w, 250px);
+  background: var(--bg-white); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; z-index: 60; transition: transform .18s ease;
+}
+body.nav-collapsed { --nav-w: 0px; }
+.proj-nav-head { padding: 10px 12px; border-bottom: 1px solid var(--border-light); display: flex; align-items: center; gap: 8px; }
+.proj-nav-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); flex: 1; }
+.proj-nav-search { padding: 8px 12px; border-bottom: 1px solid var(--border-light); }
+.proj-nav-search input { width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; outline: none; box-sizing: border-box; }
+.proj-nav-list { flex: 1; overflow-y: auto; padding: 6px 0 20px; }
+.proj-nav-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: grab;
+  font-size: 13px; color: var(--text); border-left: 3px solid transparent; user-select: none;
+}
+.proj-nav-item:hover { background: #f8f9fa; }
+.proj-nav-item.active { background: #e7f1ff; border-left-color: var(--primary); font-weight: 600; }
+.proj-nav-item.dragging { opacity: .4; }
+.proj-nav-item.drop-above { box-shadow: inset 0 2px 0 var(--primary); }
+.proj-nav-item.drop-below { box-shadow: inset 0 -2px 0 var(--primary); }
+.proj-nav-idx { width: 18px; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.proj-nav-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-nav-count { color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.proj-nav-hint { padding: 6px 12px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border-light); }
+.proj-nav-toggle {
+  position: fixed; left: var(--nav-w, 250px); top: 50%; transform: translateY(-50%); z-index: 61;
+  width: 18px; height: 52px; border: 1px solid var(--border); border-left: none;
+  border-radius: 0 6px 6px 0; background: var(--bg-white); color: var(--text-muted);
+  cursor: pointer; font-size: 11px; line-height: 1; padding: 0;
+}
+.proj-nav-toggle:hover { background: #f1f3f5; color: var(--primary); }
+@media (max-width: 900px) {
+  .proj-nav { transform: translateX(-100%); }
+  .proj-nav-toggle { left: 0; }
+  .tab-content { padding-left: 24px; }
+}
 
 .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
 .btn-primary { background: var(--primary); color: white; }
@@ -156,6 +193,13 @@ tr:hover { background: var(--bg-light); }
 .timeline-desc { font-size: 13px; margin-top: 4px; }
 
 .project-group { margin-bottom: 16px; }
+/* 从左侧导航定位过来时的高亮 */
+.project-group.flash > .project-group-title { animation: projFlash 1.6s ease; }
+@keyframes projFlash {
+  0%, 60% { background: #fff3cd; box-shadow: inset 3px 0 0 #f59e0b; }
+  100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
+}
+.project-group-title { transition: background .3s ease; }
 .project-group table { table-layout: fixed; width: 100%; }
 .project-group th:nth-child(1) { width: 91px; }
 .project-group th:nth-child(2) { width: 130px; }
@@ -360,6 +404,20 @@ tr:hover { background: var(--bg-light); }
   </div>
   <div id="taskStats" class="stats-grid stats-grid-compact"></div>
 </div>
+
+<!-- 左侧项目导航：可折叠、可拖拽排序 -->
+<aside id="projNav" class="proj-nav">
+  <div class="proj-nav-head">
+    <span class="proj-nav-title">项目导航</span>
+    <button class="btn btn-outline btn-sm" onclick="toggleProjNav()" title="折叠/展开导航栏">«</button>
+  </div>
+  <div class="proj-nav-search">
+    <input type="text" id="projNavSearch" placeholder="搜索项目号或名称…" oninput="renderProjNav()">
+  </div>
+  <div class="proj-nav-list" id="projNavList"></div>
+  <div class="proj-nav-hint">拖动项目可调整清单顺序，点击可定位</div>
+</aside>
+<button class="proj-nav-toggle" id="projNavToggle" onclick="toggleProjNav()" title="展开项目导航">»</button>
 
 <!-- Tab 1: 任务管理 -->
 <div id="tab-tasks" class="tab-content active">
@@ -1474,6 +1532,167 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+// ====== 左侧项目导航（可折叠 + 拖拽排序） ======
+// 顺序持久化在 data.projectOrder（项目号数组）；未记录过的项目按项目号追加到末尾
+var _projNavCollapsed = false;
+var _projNavDragSrc = null;
+
+function getProjectOrder() {
+  const data = loadData();
+  const saved = (data.projectOrder && Array.isArray(data.projectOrder)) ? data.projectOrder : [];
+  const all = [];
+  data.tasks.forEach(t => { if (all.indexOf(t.projectName) === -1) all.push(t.projectName); });
+  const rest = all.filter(p => saved.indexOf(p) === -1).sort();
+  return saved.filter(p => all.indexOf(p) !== -1).concat(rest);
+}
+
+function saveProjectOrder(order) {
+  const data = loadData();
+  data.projectOrder = order;
+  saveData(data);
+}
+
+function renderProjNav() {
+  const box = document.getElementById('projNavList');
+  if (!box) return;
+  const searchEl = document.getElementById('projNavSearch');
+  const kw = searchEl ? searchEl.value.trim().toLowerCase() : '';
+  const data = loadData();
+  const counts = {}, titles = {};
+  data.tasks.forEach(t => {
+    counts[t.projectName] = (counts[t.projectName] || 0) + 1;
+    if (t.projectTitle && !titles[t.projectName]) titles[t.projectName] = t.projectTitle;
+  });
+  const order = getProjectOrder();
+  const list = order.filter(p => !kw ||
+    p.toLowerCase().includes(kw) || (titles[p] || '').toLowerCase().includes(kw));
+  if (!list.length) {
+    box.innerHTML = '<div style="padding:16px 12px; color:var(--text-muted); font-size:12px;">没有匹配的项目</div>';
+    return;
+  }
+  box.innerHTML = list.map((p, i) => `
+    <div class="proj-nav-item" draggable="true" data-project="${escAttr(p)}" title="${escAttr(p + (titles[p] ? ' · ' + titles[p] : '') + '（' + (counts[p] || 0) + ' 个任务，可拖动排序）')}">
+      <span class="proj-nav-idx">${i + 1}</span>
+      <span class="proj-nav-name">${escAttr(p)}${titles[p] ? ' · ' + escAttr(titles[p]) : ''}</span>
+      <span class="proj-nav-count">${counts[p] || 0}</span>
+    </div>`).join('');
+}
+
+function _projNavClearMarks(box) {
+  box.querySelectorAll('.proj-nav-item').forEach(el => el.classList.remove('dragging', 'drop-above', 'drop-below'));
+}
+
+function bindProjNavDrag() {
+  const box = document.getElementById('projNavList');
+  if (!box || box._navBound) return;
+  box._navBound = true;
+
+  box.addEventListener('dragstart', function (e) {
+    const it = e.target.closest('.proj-nav-item');
+    if (!it) return;
+    _projNavDragSrc = it.dataset.project;
+    it.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', _projNavDragSrc); } catch (err) {}
+    }
+  });
+
+  box.addEventListener('dragend', function () {
+    _projNavDragSrc = null;
+    _projNavClearMarks(box);
+  });
+
+  box.addEventListener('dragover', function (e) {
+    if (!_projNavDragSrc) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    _projNavClearMarks(box);
+    const it = e.target.closest('.proj-nav-item');
+    if (!it || it.dataset.project === _projNavDragSrc) return;
+    const r = it.getBoundingClientRect();
+    it.classList.add((e.clientY - r.top) > r.height / 2 ? 'drop-below' : 'drop-above');
+  });
+
+  box.addEventListener('drop', function (e) {
+    if (!_projNavDragSrc) return;
+    e.preventDefault();
+    const it = e.target.closest('.proj-nav-item');
+    const src = _projNavDragSrc;
+    _projNavClearMarks(box);
+    if (!it || it.dataset.project === src) return;
+    const target = it.dataset.project;
+    const r = it.getBoundingClientRect();
+    const after = (e.clientY - r.top) > r.height / 2;
+    const order = getProjectOrder();
+    const si = order.indexOf(src);
+    if (si === -1) return;
+    order.splice(si, 1);
+    let ti = order.indexOf(target);
+    if (ti === -1) ti = order.length - 1;
+    order.splice(after ? ti + 1 : ti, 0, src);
+    saveProjectOrder(order);
+    renderProjNav();
+    renderTasks();
+    showToast('项目顺序已保存');
+  });
+
+  // 点击定位到对应项目清单
+  box.addEventListener('click', function (e) {
+    const it = e.target.closest('.proj-nav-item');
+    if (it) jumpToProject(it.dataset.project);
+  });
+}
+
+function jumpToProject(project) {
+  switchTab('tasks');
+  setTimeout(function () {
+    document.querySelectorAll('.proj-nav-item').forEach(x => x.classList.toggle('active', x.dataset.project === project));
+    let el = null;
+    try { el = document.querySelector('.project-group[data-project="' + CSS.escape(project) + '"]'); } catch (e) {}
+    if (!el) { showToast('当前筛选条件下看不到「' + project + '」'); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1600);
+  }, 60);
+}
+
+function toggleProjNav() {
+  _projNavCollapsed = !_projNavCollapsed;
+  document.body.classList.toggle('nav-collapsed', _projNavCollapsed);
+  const nav = document.getElementById('projNav');
+  if (nav) nav.classList.toggle('collapsed', _projNavCollapsed);
+  const tg = document.getElementById('projNavToggle');
+  if (tg) {
+    tg.textContent = _projNavCollapsed ? '»' : '«';
+    tg.title = _projNavCollapsed ? '展开项目导航' : '折叠项目导航';
+  }
+  try { localStorage.setItem('tm-nav-collapsed', _projNavCollapsed ? '1' : '0'); } catch (e) {}
+  if (!_projNavCollapsed) renderProjNav();
+}
+
+function restoreProjNavState() {
+  let saved = '';
+  try { saved = localStorage.getItem('tm-nav-collapsed') || ''; } catch (e) {}
+  if (saved === '1') _projNavCollapsed = true;
+  const nav = document.getElementById('projNav');
+  if (nav) nav.classList.toggle('collapsed', _projNavCollapsed);
+  document.body.classList.toggle('nav-collapsed', _projNavCollapsed);
+  const tg = document.getElementById('projNavToggle');
+  if (tg) {
+    tg.textContent = _projNavCollapsed ? '»' : '«';
+    tg.title = _projNavCollapsed ? '展开项目导航' : '折叠项目导航';
+  }
+}
+
+// 侧栏顶部要精确贴在页头下方，避免写死高度
+function updateNavTop() {
+  const h1 = document.querySelector('.app-header');
+  const h2 = document.querySelector('.tab-bar');
+  const top = (h1 ? h1.offsetHeight : 0) + (h2 ? h2.offsetHeight : 0);
+  document.documentElement.style.setProperty('--nav-top', top + 'px');
+}
+
 // ====== Task Management ======
 // 延期适用性：只有「进行中」「已延期」参与顺延。
 // 排除「已完成」（终态，完成时间冻结）、「暂停」（暂停期间冻结）、「未开始」（尚未进入执行，不顺延）。
@@ -2055,11 +2274,18 @@ function renderTasks() {
   }
 
   let html = '';
-  for (const [proj, projTasks] of Object.entries(groups)) {
+  // 项目分组顺序 = 左侧导航的顺序（可拖动调整，持久化在 data.projectOrder）
+  const _navOrder = getProjectOrder();
+  const projList = Object.keys(groups).sort((a, b) => {
+    const ia = _navOrder.indexOf(a), ib = _navOrder.indexOf(b);
+    return (ia === -1 ? 99999 : ia) - (ib === -1 ? 99999 : ib);
+  });
+  for (const proj of projList) {
+    const projTasks = groups[proj];
     // Skip projects where all tasks are completed (when toggle is on)
     if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
     const projTitle = projTasks[0].projectTitle || '';
-    html += `<div class="project-group"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span><button class="btn-add-task" title="为该项目新建任务" onclick="addTaskToProject('${escAttr(proj)}')">＋</button></div><table>
+    html += `<div class="project-group" data-project="${escAttr(proj)}"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span><button class="btn-add-task" title="为该项目新建任务" onclick="addTaskToProject('${escAttr(proj)}')">＋</button></div><table>
       <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
     projTasks.forEach(t => {
       const activeRecs = activeDelayRecords(t);
@@ -2092,6 +2318,7 @@ function renderTasks() {
     html += '</tbody></table></div>';
   }
   document.getElementById('taskList').innerHTML = html;
+  renderProjNav(); // 项目增删或改名后同步侧栏
 }
 
 // 属性列下拉的 HTML（项目级：同项目号共享一个属性）
@@ -6247,6 +6474,14 @@ async function init() {
   renderTasks();
   // 恢复 GitHub 自动同步的顶栏状态（若已开启）
   try { ghLoadConfig(); } catch (e) {}
+  // 初始化左侧项目导航（状态恢复 + 拖拽绑定 + 顶部定位）
+  try {
+    restoreProjNavState();
+    bindProjNavDrag();
+    updateNavTop();
+    renderProjNav();
+    window.addEventListener('resize', updateNavTop);
+  } catch (e) {}
   // 异步加载官方节假日数据
   await loadHolidaysFromAPI();
   // 恢复存档路径
