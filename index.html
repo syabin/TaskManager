@@ -39,6 +39,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .app-header { background: var(--primary); color: white; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .app-header h1 { font-size: 18px; font-weight: 600; }
 .data-status-inline { font-size: 11px; color: #fff; white-space: nowrap; flex-shrink: 0; }
+/* GitHub 自动同步状态（顶栏）：显示最近一次静默上传结果 */
+.header-status-group { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.gh-auto-status { font-size: 11px; color: rgba(255,255,255,.92); white-space: nowrap; flex-shrink: 0; margin-left: 14px; }
+.gh-auto-status.err { color: #ffd7d7; }
+.gh-auto-status.busy { color: rgba(255,255,255,.75); }
 .tab-bar { display: flex; align-items: center; justify-content: space-between; background: var(--bg-white); border-bottom: 1px solid var(--border); padding: 0 24px; flex-shrink: 0; }
 .tab-btns { display: flex; }
 .tab-btn { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 14px; color: var(--text-secondary); border-bottom: 3px solid transparent; transition: all 0.2s; }
@@ -338,7 +343,10 @@ tr:hover { background: var(--bg-light); }
 <div class="toast-container" id="toastContainer"></div>
 <div class="app-header">
   <h1>项目任务与临时事项管理</h1>
-  <span id="dataStatus" class="data-status-inline"></span>
+  <div class="header-status-group">
+    <span id="dataStatus" class="data-status-inline"></span>
+    <span id="ghAutoStatus" class="gh-auto-status" title=""></span>
+  </div>
   <button id="undoBtn" class="btn btn-outline" onclick="undoLastAction()" disabled title="撤回上一步操作（所有写操作均可撤回）">↩ 撤回</button>
 </div>
 
@@ -601,6 +609,12 @@ tr:hover { background: var(--bg-light); }
           <input type="checkbox" id="ghRemember" onchange="ghSaveConfig()"> 记住令牌（存本机浏览器）
         </label>
       </div>
+      <div class="form-group" style="justify-content:flex-end;">
+        <label>&nbsp;</label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; font-weight:400; color:var(--text); white-space:nowrap;" title="每次编辑保存后，静默把数据上传到 GitHub（不弹窗、不打扰）">
+          <input type="checkbox" id="ghAutoSync" onchange="ghSaveConfig(); ghOnAutoSyncToggle();"> 编辑后自动静默上传
+        </label>
+      </div>
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
       <button class="btn btn-outline" id="ghBtnTest" onclick="ghTestConn()">测试连接</button>
@@ -676,6 +690,8 @@ function saveData(data) {
   } catch (e) {}
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   updateDataStatus();
+  // GitHub 自动静默同步：调度一次（连续编辑会合并，见 scheduleGhAutoSync）
+  try { scheduleGhAutoSync(); } catch (e) {}
 }
 
 function updateDataStatus() {
@@ -5117,6 +5133,92 @@ async function ghRepairAllArchiveDirs() {
   showToast(`修复完成：改名 ${ok} 个${copied ? `，复制 ${copied} 个` : ''}${fail ? `，失败 ${fail} 个` : ''}`);
 }
 
+// ====== GitHub 自动静默同步 ======
+// 勾选「编辑后自动静默上传」后：每次 saveData（所有编辑的统一入口）后延迟 3 秒静默上传，
+// 连续编辑会合并成一次；不弹窗、不打扰，结果只在顶栏显示一行状态。
+var _ghAutoTimer = null;
+var _ghAutoBusy = false;
+var _ghSuppressAuto = false;       // 拉取 / 手动上传期间抑制自动同步，避免循环
+var _ghLastSyncedFingerprint = ''; // 已成功同步的数据指纹，用于跳过无实质变化的同步
+var _ghAttShaCache = {};           // 附件 blob sha 缓存：itemId/name/size/lastModified → sha
+
+function ghAutoSyncEnabled() {
+  const box = document.getElementById('ghAutoSync');
+  return !!(box && box.checked);
+}
+
+function ghSetAutoStatus(text, cls, title) {
+  const el = document.getElementById('ghAutoStatus');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'gh-auto-status' + (cls ? ' ' + cls : '');
+  el.title = title || '';
+}
+
+// 页面加载 / 切换到数据管理时恢复顶栏状态
+function ghRestoreAutoStatus() {
+  const sync = ghGetSync();
+  if (!sync.syncedAt) return;
+  const d = loadData();
+  const total = d.tasks.length + d.tempItems.length + d.deliveryItems.length;
+  _ghLastSyncedFingerprint = ghLocalFingerprint();
+  ghSetAutoStatus(`${total} 条已更新至云端`, '',
+    `最近同步：${formatDate(sync.syncedAt)}\n数据文件：${ghConfig().path}\n任务 ${d.tasks.length} · 临时事项 ${d.tempItems.length} · 交付件 ${d.deliveryItems.length}`);
+}
+
+function scheduleGhAutoSync() {
+  if (!ghAutoSyncEnabled() || _ghSuppressAuto || _ghAutoBusy) return;
+  if (_ghAutoTimer) clearTimeout(_ghAutoTimer);
+  _ghAutoTimer = setTimeout(function () { _ghAutoTimer = null; runGhAutoSync(); }, 3000);
+}
+
+async function runGhAutoSync() {
+  if (_ghAutoBusy || _ghSuppressAuto || !ghAutoSyncEnabled()) return;
+  const fp = ghLocalFingerprint();
+  if (fp === _ghLastSyncedFingerprint) return; // 数据没有实质变化
+  if (!ghGetToken()) {
+    ghSetAutoStatus('自动同步待填写令牌', 'err', '请到「数据管理 → GitHub 数据同步」填写访问令牌 (PAT)');
+    return;
+  }
+  _ghAutoBusy = true;
+  ghSetAutoStatus('正在同步至云端…', 'busy');
+  try {
+    const res = await ghUpload({ silent: true });
+    if (res && res.ok) {
+      _ghLastSyncedFingerprint = ghLocalFingerprint();
+      const d = loadData();
+      const total = d.tasks.length + d.tempItems.length + d.deliveryItems.length;
+      ghSetAutoStatus(`${total} 条已更新至云端`, '',
+        `最近同步：${new Date().toLocaleString('zh-CN')}\n数据文件：${ghConfig().path}\n任务 ${d.tasks.length} · 临时事项 ${d.tempItems.length} · 交付件 ${d.deliveryItems.length}`);
+    } else if (res && res.reason === 'conflict') {
+      ghSetAutoStatus('云端有改动，自动同步已暂停', 'err',
+        '其他设备改动了云端数据，为避免覆盖已停止自动同步。\n请到「数据管理 → GitHub 数据同步」手动处理。');
+    } else if (res && res.reason === 'need-confirm') {
+      ghSetAutoStatus('首次同步需手动确认', 'err',
+        '云端已有数据但本机没有同步记录，为安全起见不自动覆盖。\n请到「数据管理 → GitHub 数据同步」手动上传一次。');
+    } else if (res && res.reason === 'error') {
+      ghSetAutoStatus('自动同步失败', 'err', (res.error && res.error.message) || '未知错误');
+    }
+  } catch (e) {
+    ghSetAutoStatus('自动同步失败', 'err', (e && e.message) || '未知错误');
+  } finally {
+    _ghAutoBusy = false;
+  }
+}
+
+function ghOnAutoSyncToggle() {
+  ghSaveConfig();
+  if (!ghAutoSyncEnabled()) { ghSetAutoStatus('', ''); return; }
+  if (!ghGetToken()) {
+    ghSetAutoStatus('请先填写访问令牌 (PAT)', 'err', '自动同步需要令牌才能工作');
+    showToast('请先填写访问令牌 (PAT)', 'error');
+    return;
+  }
+  ghSetAutoStatus('已开启自动同步', 'busy', '每次编辑保存后约 3 秒静默上传，结果显示在这里');
+  _ghLastSyncedFingerprint = ''; // 强制下一次同步一次
+  scheduleGhAutoSync();
+}
+
 // ====== GitHub 数据同步（Contents API） ======
 // 数据文件默认存于私有仓库 syabin/task-data 的 data/task-data.json。
 // 冲突策略：上传前比对上次同步记录的远端 sha，不一致即拒绝覆盖并提示（保护其他设备的改动）。
@@ -5130,12 +5232,14 @@ function ghVal(id) { const el = document.getElementById(id); return el ? String(
 
 function ghConfig() {
   const attBox = document.getElementById('ghSyncAttachments');
+  const autoBox = document.getElementById('ghAutoSync');
   return {
     repo: ghVal('ghRepo') || 'syabin/task-data',
     path: ghVal('ghPath') || 'data/task-data.json',
     branch: ghVal('ghBranch') || 'main',
     attPath: ghVal('ghAttPath') || 'data/attachments',
-    syncAttachments: attBox ? attBox.checked : true
+    syncAttachments: attBox ? attBox.checked : true,
+    autoSync: autoBox ? autoBox.checked : false
   };
 }
 
@@ -5159,6 +5263,9 @@ function ghLoadConfig() {
   fill('ghAttPath', 'data/attachments');
   const aBox = document.getElementById('ghSyncAttachments');
   if (aBox) aBox.checked = cfg.syncAttachments !== false;
+  const autoBox = document.getElementById('ghAutoSync');
+  if (autoBox) autoBox.checked = !!cfg.autoSync;
+  if (cfg.autoSync) ghRestoreAutoStatus(); else ghSetAutoStatus('', '');
   let tok = '';
   try { tok = localStorage.getItem(GH_TOKEN_KEY) || ''; } catch (e) {}
   const tEl = document.getElementById('ghToken');
@@ -5435,9 +5542,14 @@ async function ghUploadAttachments(cfg, data) {
     }
     try {
       setGhStatus(`正在处理附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
-      const bytes = new Uint8Array(await r.file.arrayBuffer());
       const p = ghAttachmentPath(cfg, a.item.id, a.name, a.kind);
-      const localSha = await ghBlobSha(bytes);
+      // sha 缓存：以「事项ID/文件名/大小/修改时间」为键，命中时不必再读内容算哈希
+      const ck = a.item.id + '/' + a.name + '/' + r.file.size + '/' + (r.file.lastModified || 0);
+      let localSha = _ghAttShaCache[ck];
+      if (!localSha) {
+        localSha = await ghBlobSha(new Uint8Array(await r.file.arrayBuffer()));
+        _ghAttShaCache[ck] = localSha;
+      }
       // 远端 sha：优先用清单；清单不可用时逐个 GET（降级路径）
       let remoteSha = null;
       if (remoteMap) remoteSha = remoteMap[p] || null;
@@ -5447,8 +5559,9 @@ async function ghUploadAttachments(cfg, data) {
           remoteSha = meta.sha;
         } catch (e) { if (e.status !== 404) throw e; }
       }
-      // 内容完全一致 → 远端已是最新，不重复上传
+      // 内容完全一致 → 远端已是最新，不重复上传（连文件内容都不用读）
       if (localSha && remoteSha && localSha === remoteSha) { unchanged++; continue; }
+      const bytes = new Uint8Array(await r.file.arrayBuffer());
       const body = {
         message: 'chore(sync): 附件 ' + a.name,
         content: ghB64EncodeBytes(bytes),
@@ -5504,9 +5617,13 @@ async function ghDownloadAttachments(cfg, data) {
   return { saved, unchanged, missing, total: list.length, noHandle: false, details };
 }
 
-async function ghUpload() {
+async function ghUpload(opts) {
+  // opts.silent = true 时用于自动同步：不弹任何确认框、不打扰，结果只写到顶栏
+  const silent = !!(opts && opts.silent);
   const cfg = ghConfig();
-  if (!confirm(`确定把当前数据上传到 ${cfg.repo} 的 ${cfg.path}（分支 ${cfg.branch}）？`)) return;
+  if (!silent && !confirm(`确定把当前数据上传到 ${cfg.repo} 的 ${cfg.path}（分支 ${cfg.branch}）？`)) {
+    return { ok: false, reason: 'cancelled' };
+  }
   ghSaveConfig();
   setGhBusy(true);
   setGhStatus('正在检查远端状态…');
@@ -5519,18 +5636,23 @@ async function ghUpload() {
     if (remote && sync.sha && sync.sha !== remote.sha) {
       // 冲突：远端已被其他设备改动 → 拒绝覆盖
       setGhStatus('<span style="color:#dc3545;font-weight:600;">检测到冲突，已拒绝覆盖（远端已被其他设备改动）</span>');
-      alert('检测到冲突，已拒绝覆盖。\n\n' +
-        '本机上次同步的远端 sha：' + (sync.sha || '').slice(0, 7) + '\n' +
-        '远端当前 sha：' + remote.sha.slice(0, 7) + '\n\n' +
-        '为避免丢失其他设备的改动，本次上传已取消。\n建议先「⬇ 从 GitHub 拉取」查看远端内容，再决定如何处理。');
-      return;
+      if (!silent) {
+        alert('检测到冲突，已拒绝覆盖。\n\n' +
+          '本机上次同步的远端 sha：' + (sync.sha || '').slice(0, 7) + '\n' +
+          '远端当前 sha：' + remote.sha.slice(0, 7) + '\n\n' +
+          '为避免丢失其他设备的改动，本次上传已取消。\n建议先「⬇ 从 GitHub 拉取」查看远端内容，再决定如何处理。');
+      }
+      return { ok: false, reason: 'conflict' };
     }
     if (remote && !sync.sha) {
+      // 静默模式不弹确认，交给顶栏提示用户手动处理
+      if (silent) return { ok: false, reason: 'need-confirm' };
       const ok = confirm('远端已存在数据文件，但本机没有同步记录（可能由其他设备上传）。\n继续将用本地数据覆盖远端，确定吗？');
-      if (!ok) return;
+      if (!ok) return { ok: false, reason: 'cancelled' };
     } else if (!remote && sync.sha) {
+      if (silent) return { ok: false, reason: 'need-confirm' };
       const ok = confirm('远端数据文件已不存在（可能被删除），将重新创建。确定吗？');
-      if (!ok) return;
+      if (!ok) return { ok: false, reason: 'cancelled' };
     }
 
     setGhStatus('正在上传…');
@@ -5562,10 +5684,18 @@ async function ghUpload() {
     }
     ghSetSync({ sha: newSha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote, attDetails: attDetails });
     setGhStatus('<span style="color:#198754;">上传成功，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
+    if (silent) {
+      return { ok: true, sha: newSha, att: attNote };
+    }
     showToast('已上传到 GitHub' + (cfg.syncAttachments ? '（含附件）' : ''));
     updateGhStatus();
+    // 手动同步后本地与云端一致，避免紧接着再触发一次自动上传
+    _ghLastSyncedFingerprint = ghLocalFingerprint();
+    if (ghAutoSyncEnabled()) ghRestoreAutoStatus();
+    return { ok: true, sha: newSha, att: attNote };
   } catch (e) {
     handleGhError(e);
+    return { ok: false, reason: 'error', error: e };
   } finally { setGhBusy(false); }
 }
 
@@ -5575,6 +5705,7 @@ async function ghPull() {
   ghSaveConfig();
   setGhBusy(true);
   setGhStatus('正在拉取远端数据…');
+  _ghSuppressAuto = true; // 拉取会调用 saveData，期间抑制自动上传，避免刚拉完又传回去
   try {
     let remote = null;
     try { remote = await ghFetchRemote(); }
@@ -5609,9 +5740,15 @@ async function ghPull() {
     renderTempItems();
     renderDeliveryItems();
     renderReview();
+    // 拉取后本地与云端一致，避免紧接着触发一次自动上传
+    _ghLastSyncedFingerprint = ghLocalFingerprint();
+    ghRestoreAutoStatus();
   } catch (e) {
     handleGhError(e);
-  } finally { setGhBusy(false); }
+  } finally {
+    _ghSuppressAuto = false;
+    setGhBusy(false);
+  }
 }
 
 // ====== Batch Import ======
@@ -6108,6 +6245,8 @@ async function init() {
 
   updateDataStatus();
   renderTasks();
+  // 恢复 GitHub 自动同步的顶栏状态（若已开启）
+  try { ghLoadConfig(); } catch (e) {}
   // 异步加载官方节假日数据
   await loadHolidaysFromAPI();
   // 恢复存档路径
