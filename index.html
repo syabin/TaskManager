@@ -76,7 +76,7 @@ body.nav-collapsed { --nav-w: 0px; }
 .proj-nav-item.drop-below { box-shadow: inset 0 -2px 0 var(--primary); }
 .proj-nav-idx { width: 18px; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
 .proj-nav-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-nav-count { color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.proj-nav-count { color: var(--text-muted); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
 .proj-nav-hint { padding: 6px 12px; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border-light); }
 .proj-nav-toggle {
   position: fixed; left: var(--nav-w, 250px); top: 50%; transform: translateY(-50%); z-index: 61;
@@ -206,13 +206,24 @@ tr:hover { background: var(--bg-light); }
 .project-group th:nth-child(1) { width: 91px; }
 .project-group th:nth-child(2) { width: 130px; }
 .project-group th:nth-child(3) { width: 159px; }
+/* 四个时间列：居中 + 宽度收窄 15%（90px → 76px），同时压缩内边距以容纳完整日期 */
 .project-group th:nth-child(4),
 .project-group th:nth-child(5),
 .project-group th:nth-child(6),
-.project-group th:nth-child(7) { width: 90px; }
+.project-group th:nth-child(7) { width: 76px; text-align: center; }
+.project-group td:nth-child(4),
+.project-group td:nth-child(5),
+.project-group td:nth-child(6),
+.project-group td:nth-child(7) { text-align: center; padding-left: 2px; padding-right: 2px; }
 .project-group th:nth-child(8) { width: 50px; }
 .project-group th:nth-child(9) { width: 80px; }
 .project-group th:nth-child(10) { width: 180px; }
+/* 操作列：压缩单元格内边距 + 消除按钮间源码换行空白（约减少 2/3），按钮间距改由 margin 控制 */
+.project-group th:nth-child(10),
+.project-group td:nth-child(10) { padding-left: 3px; padding-right: 3px; }
+.project-group td:nth-child(10) { font-size: 0; }
+.project-group td:nth-child(10) .btn { margin-right: 4px; }
+.project-group td:nth-child(10) .btn:last-child { margin-right: 0; }
 .project-group td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); position: sticky; top: 0; z-index: 2; background: var(--bg-white); padding: 8px 0 6px; border-bottom: 2px solid var(--bg-primary-light); }
 .btn-add-task { margin-left:10px; padding:2px 10px; font-size:14px; line-height:1.4; border:1px solid var(--border); border-radius:4px; background:var(--bg-white); color:var(--primary); cursor:pointer; vertical-align:middle; }
@@ -1536,6 +1547,8 @@ document.addEventListener('keydown', function(e) {
 // 顺序持久化在 data.projectOrder（项目号数组）；未记录过的项目按项目号追加到末尾
 var _projNavCollapsed = false;
 var _projNavDragSrc = null;
+// 当前筛选条件下实际展示的项目及其可见任务数（renderTasks 写入，导航共用同一口径）
+var _visibleProjects = null;
 
 function getProjectOrder() {
   const data = loadData();
@@ -1558,24 +1571,45 @@ function renderProjNav() {
   const searchEl = document.getElementById('projNavSearch');
   const kw = searchEl ? searchEl.value.trim().toLowerCase() : '';
   const data = loadData();
-  const counts = {}, titles = {};
-  data.tasks.forEach(t => {
-    counts[t.projectName] = (counts[t.projectName] || 0) + 1;
-    if (t.projectTitle && !titles[t.projectName]) titles[t.projectName] = t.projectTitle;
-  });
+  const titles = {};
+  data.tasks.forEach(t => { if (t.projectTitle && !titles[t.projectName]) titles[t.projectName] = t.projectTitle; });
+
+  // 与右侧清单保持一致：只列出当前筛选下真正展示出来的项目（_visibleProjects 为 null 表示尚未计算，则不过滤）
   const order = getProjectOrder();
-  const list = order.filter(p => !kw ||
+  let baseList, stat;
+  if (_visibleProjects) {
+    baseList = _visibleProjects.map(v => v.project);
+    stat = {};
+    _visibleProjects.forEach(v => { stat[v.project] = v; });
+  } else {
+    // 尚未计算（例如页面刚加载）：按全量数据统计
+    baseList = order;
+    stat = {};
+    const all = {}, open = {};
+    data.tasks.forEach(t => {
+      all[t.projectName] = (all[t.projectName] || 0) + 1;
+      if (t.status !== '已完成') open[t.projectName] = (open[t.projectName] || 0) + 1;
+    });
+    baseList.forEach(p => { stat[p] = { count: all[p] || 0, open: open[p] || 0, total: all[p] || 0 }; });
+  }
+
+  const list = baseList.filter(p => !kw ||
     p.toLowerCase().includes(kw) || (titles[p] || '').toLowerCase().includes(kw));
   if (!list.length) {
-    box.innerHTML = '<div style="padding:16px 12px; color:var(--text-muted); font-size:12px;">没有匹配的项目</div>';
+    box.innerHTML = '<div style="padding:16px 12px; color:var(--text-muted); font-size:12px;">'
+      + (_visibleProjects ? '当前筛选下没有可显示的项目' : '没有匹配的项目') + '</div>';
     return;
   }
-  box.innerHTML = list.map((p, i) => `
-    <div class="proj-nav-item" draggable="true" data-project="${escAttr(p)}" title="${escAttr(p + (titles[p] ? ' · ' + titles[p] : '') + '（' + (counts[p] || 0) + ' 个任务，可拖动排序）')}">
-      <span class="proj-nav-idx">${i + 1}</span>
+  box.innerHTML = list.map(p => {
+    const seq = order.indexOf(p) + 1; // 序号沿用总顺序，不因筛选重新编号
+    const s = stat[p] || { open: 0, total: 0 };
+    return `
+    <div class="proj-nav-item" draggable="true" data-project="${escAttr(p)}" title="${escAttr(p + (titles[p] ? ' · ' + titles[p] : '') + '（未完成 ' + s.open + ' 个，共 ' + s.total + ' 个任务，可拖动排序）')}">
+      <span class="proj-nav-idx">${seq}</span>
       <span class="proj-nav-name">${escAttr(p)}${titles[p] ? ' · ' + escAttr(titles[p]) : ''}</span>
-      <span class="proj-nav-count">${counts[p] || 0}</span>
-    </div>`).join('');
+      <span class="proj-nav-count">${s.open}/${s.total}</span>
+    </div>`;
+  }).join('');
 }
 
 function _projNavClearMarks(box) {
@@ -2270,20 +2304,34 @@ function renderTasks() {
 
   if (tasks.length === 0 || (hideCompletedProjects && Object.values(groups).every(g => g.every(t => t.status === '已完成')))) {
     document.getElementById('taskList').innerHTML = '<div class="empty-state"><p>暂无待办任务</p></div>';
+    _visibleProjects = [];
+    renderProjNav();
     return;
   }
 
   let html = '';
   // 项目分组顺序 = 左侧导航的顺序（可拖动调整，持久化在 data.projectOrder）
   const _navOrder = getProjectOrder();
-  const projList = Object.keys(groups).sort((a, b) => {
-    const ia = _navOrder.indexOf(a), ib = _navOrder.indexOf(b);
-    return (ia === -1 ? 99999 : ia) - (ib === -1 ? 99999 : ib);
-  });
+  const projList = Object.keys(groups)
+    .sort((a, b) => {
+      const ia = _navOrder.indexOf(a), ib = _navOrder.indexOf(b);
+      return (ia === -1 ? 99999 : ia) - (ib === -1 ? 99999 : ib);
+    })
+    // 全部完成的项目在「隐藏已完成项目」开启时不展示
+    .filter(p => !(hideCompletedProjects && groups[p].every(t => t.status === '已完成')));
+  // 记录本次真正展示的项目与计数，供左侧导航使用（保证两侧口径一致）
+  // count = 当前筛选可见数，open = 可见中未完成数，total = 该项目全部任务数
+  const _totalByProject = {};
+  data.tasks.forEach(t => { _totalByProject[t.projectName] = (_totalByProject[t.projectName] || 0) + 1; });
+  _visibleProjects = projList.map(p => ({
+    project: p,
+    count: groups[p].length,
+    open: groups[p].filter(t => t.status !== '已完成').length,
+    total: _totalByProject[p] || groups[p].length
+  }));
+
   for (const proj of projList) {
     const projTasks = groups[proj];
-    // Skip projects where all tasks are completed (when toggle is on)
-    if (hideCompletedProjects && projTasks.every(t => t.status === '已完成')) continue;
     const projTitle = projTasks[0].projectTitle || '';
     html += `<div class="project-group" data-project="${escAttr(proj)}"><div class="project-group-title">${proj}${projTitle ? ' — ' + projTitle : ''}<span style="margin-left:10px;">${projectAttrSelectHtml(proj, data.projectAttrs)}</span><button class="btn-add-task" title="为该项目新建任务" onclick="addTaskToProject('${escAttr(proj)}')">＋</button></div><table>
       <thead><tr><th>项目号</th><th>项目名称</th><th>任务名称</th><th>开始时间</th><th>计划完成时间</th><th>计划调整</th><th>当前完成时间</th><th>状态</th><th>延期</th><th>操作</th></tr></thead><tbody>`;
