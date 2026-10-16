@@ -2082,7 +2082,7 @@ function renderTasks() {
           <button class="btn btn-outline btn-sm" onclick="showTaskForm('${t.id}')">编辑</button>
           ${t.status === '暂停'
             ? `<button class="btn btn-outline btn-sm" onclick="resumeTask('${t.id}')" style="color:#856404;" title="启动任务，恢复顺延">▶ 启动</button>`
-            : (t.status === '已完成' ? '' : `<button class="btn btn-outline btn-sm" onclick="pauseTask('${t.id}')" title="暂停任务：期间不计延期">⏸ 暂停</button>`)}
+            : `<button class="btn btn-outline btn-sm" onclick="pauseTask('${t.id}')" title="${t.status === '已完成' ? '任务已完成，无需暂停' : '暂停任务：期间不计延期'}" ${t.status === '已完成' ? 'disabled style="opacity:.45;cursor:not-allowed;"' : ''}>⏸ 暂停</button>`}
           <button class="btn btn-outline btn-sm" onclick="showAdjustForm('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>调整</button>
           <button class="btn btn-outline btn-sm" onclick="completeTask('${t.id}')" ${t.status === '已完成' ? 'disabled' : ''}>完成</button>
           <button class="btn btn-danger btn-sm" onclick="deleteTask('${t.id}')">删除</button>
@@ -2270,7 +2270,7 @@ function showTaskDelays(taskId) {
       <div style="display:flex; gap:8px; align-items:center;">
         ${task.status === '暂停'
           ? `<button class="btn btn-outline btn-sm" onclick="_pendingDelayModalTaskId='${taskId}'; resumeTask('${taskId}')" style="color:#856404;">▶ 启动任务</button>`
-          : (task.status === '已完成' ? '' : `<button class="btn btn-outline btn-sm" onclick="_pendingDelayModalTaskId='${taskId}'; pauseTask('${taskId}')">⏸ 暂停任务</button>`)}
+          : `<button class="btn btn-outline btn-sm" onclick="_pendingDelayModalTaskId='${taskId}'; pauseTask('${taskId}')" title="${task.status === '已完成' ? '任务已完成，无需暂停' : '暂停任务：期间不计延期'}" ${task.status === '已完成' ? 'disabled style="opacity:.45;cursor:not-allowed;"' : ''}>⏸ 暂停任务</button>`}
         <button class="modal-close" onclick="closeModal()">&times;</button>
       </div>
     </div>
