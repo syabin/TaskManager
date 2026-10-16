@@ -53,11 +53,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tab-content.active { display: flex; }
 /* ====== 左侧项目导航（可折叠 + 拖拽排序） ====== */
 .proj-nav {
-  position: fixed; left: 0; top: var(--nav-top, 92px); bottom: 0; width: var(--nav-w, 250px);
+  position: fixed; left: 0; top: var(--nav-top, 92px); bottom: 0; width: 250px;
   background: var(--bg-white); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; z-index: 60; transition: transform .18s ease;
 }
 body.nav-collapsed { --nav-w: 0px; }
+/* 折叠：整条侧栏移出屏幕（宽度保持 250px，位移才有参照，避免内容溢出残留） */
+.proj-nav.collapsed { transform: translateX(-100%); }
 .proj-nav-head { padding: 10px 12px; border-bottom: 1px solid var(--border-light); display: flex; align-items: center; gap: 8px; }
 .proj-nav-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); flex: 1; }
 .proj-nav-search { padding: 8px 12px; border-bottom: 1px solid var(--border-light); }
@@ -409,15 +411,13 @@ tr:hover { background: var(--bg-light); }
 <aside id="projNav" class="proj-nav">
   <div class="proj-nav-head">
     <span class="proj-nav-title">项目导航</span>
-    <button class="btn btn-outline btn-sm" onclick="toggleProjNav()" title="折叠/展开导航栏">«</button>
   </div>
   <div class="proj-nav-search">
     <input type="text" id="projNavSearch" placeholder="搜索项目号或名称…" oninput="renderProjNav()">
   </div>
   <div class="proj-nav-list" id="projNavList"></div>
-  <div class="proj-nav-hint">拖动项目可调整清单顺序，点击可定位</div>
 </aside>
-<button class="proj-nav-toggle" id="projNavToggle" onclick="toggleProjNav()" title="展开项目导航">»</button>
+<button class="proj-nav-toggle" id="projNavToggle" onclick="toggleProjNav()" title="折叠项目导航">«</button>
 
 <!-- Tab 1: 任务管理 -->
 <div id="tab-tasks" class="tab-content active">
