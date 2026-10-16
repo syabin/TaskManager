@@ -52,17 +52,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .tab-content { display: none; flex: 1; min-height: 0; padding: 0 24px 24px calc(var(--nav-w, 250px) + 24px); width: 100%; overflow: hidden; flex-direction: column; }
 .tab-content.active { display: flex; }
 /* ====== 左侧项目导航（可折叠 + 拖拽排序） ====== */
+/* ====== 折叠状态（渲染前由 head 内联脚本打 class，见下）======
+   策略：侧栏默认隐藏，只有在确认「展开」时才显示 —— 这样无论脚本何时生效，
+   首帧都不可能出现"先展开再收起"的闪烁。 */
+html.nav-collapsed, body.nav-collapsed { --nav-w: 0px; }
 .proj-nav {
   position: fixed; left: 0; top: var(--nav-top, 92px); bottom: 0; width: 250px;
   background: var(--bg-white); border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; z-index: 60; transition: transform .18s ease;
+  display: flex; flex-direction: column; z-index: 60;
+  transform: translateX(-100%); visibility: hidden;
+  transition: transform .18s ease, visibility 0s linear .18s;
+}
+html.nav-expanded .proj-nav, body.nav-expanded .proj-nav {
+  transform: none; visibility: visible;
+  transition: transform .18s ease, visibility 0s;
+}
+.proj-nav.collapsed {
+  transform: translateX(-100%); visibility: hidden;
+  transition: transform .18s ease, visibility 0s linear .18s;
 }
 /* 折叠状态同时支持 html（渲染前由内联脚本打上）与 body（JS 切换时打上），
    前者保证刷新不闪烁，后者保证运行期切换即时生效 */
 html.nav-collapsed, body.nav-collapsed { --nav-w: 0px; }
-html.nav-collapsed .proj-nav, body.nav-collapsed .proj-nav { transform: translateX(-100%); }
-/* 折叠：整条侧栏移出屏幕（宽度保持 250px，位移才有参照，避免内容溢出残留） */
-.proj-nav.collapsed { transform: translateX(-100%); }
+/* 折叠：整条侧栏移出屏幕（宽度保持 250px，位移才有参照，避免内容溢出残留）。
+   折叠路径不做过渡、且立即隐藏 —— 即使首帧样式生效时机有偏差，也不会看到侧栏"闪一下" */
+html.nav-collapsed .proj-nav, body.nav-collapsed .proj-nav { transform: translateX(-100%); visibility: hidden; transition: none; }
+.proj-nav.collapsed { transform: translateX(-100%); visibility: hidden; transition: none; }
 .proj-nav-head { padding: 10px 12px; border-bottom: 1px solid var(--border-light); display: flex; align-items: center; gap: 8px; }
 .proj-nav-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); flex: 1; }
 .proj-nav-search { padding: 8px 12px; border-bottom: 1px solid var(--border-light); }
@@ -88,10 +103,10 @@ html.nav-collapsed .proj-nav, body.nav-collapsed .proj-nav { transform: translat
   cursor: pointer; font-size: 11px; line-height: 1; padding: 0;
 }
 .proj-nav-toggle:hover { background: #f1f3f5; color: var(--primary); }
-/* 把手符号由 CSS 决定，折叠状态在渲染前即生效 → 不会出现「«」闪一下再变「»」 */
+/* 把手符号由 CSS 决定：默认（未确认展开）显示 »，展开后显示 « */
 .proj-nav-toggle { font-size: 0; }
-.proj-nav-toggle::before { content: '«'; font-size: 11px; }
-html.nav-collapsed .proj-nav-toggle::before, body.nav-collapsed .proj-nav-toggle::before { content: '»'; }
+.proj-nav-toggle::before { content: '»'; font-size: 11px; }
+html.nav-expanded .proj-nav-toggle::before, body.nav-expanded .proj-nav-toggle::before { content: '«'; }
 @media (max-width: 900px) {
   .proj-nav { transform: translateX(-100%); }
   .proj-nav-toggle { left: 0; }
@@ -223,13 +238,17 @@ tr:hover { background: var(--bg-light); }
 .project-group td:nth-child(6),
 .project-group td:nth-child(7) { text-align: center; padding-left: 2px; padding-right: 2px; }
 .project-group th:nth-child(8) { width: 50px; }
-.project-group th:nth-child(9) { width: 80px; }
+/* 延期列：宽度减少 40%（80px → 48px），居中 + 压缩内边距与字号以容纳完整文字 */
+.project-group th:nth-child(9) { width: 48px; text-align: center; }
+.project-group td:nth-child(9) { text-align: center; padding-left: 2px; padding-right: 2px; }
+.project-group td:nth-child(9) .delay-link { font-size: 11px; }
 .project-group th:nth-child(10) { width: 180px; }
 /* 操作列：压缩单元格内边距 + 消除按钮间源码换行空白（约减少 2/3），按钮间距改由 margin 控制 */
 .project-group th:nth-child(10),
 .project-group td:nth-child(10) { padding-left: 3px; padding-right: 3px; }
 .project-group td:nth-child(10) { font-size: 0; }
-.project-group td:nth-child(10) .btn { margin-right: 4px; }
+/* 文字到按钮边缘的内边距也压掉约 2/3（.btn-sm 原为左右 10px → 3px） */
+.project-group td:nth-child(10) .btn { margin-right: 4px; padding-left: 3px; padding-right: 3px; }
 .project-group td:nth-child(10) .btn:last-child { margin-right: 0; }
 .project-group td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group-title { font-size: 14px; font-weight: 600; color: var(--primary); position: sticky; top: 0; z-index: 2; background: var(--bg-white); padding: 8px 0 6px; border-bottom: 2px solid var(--bg-primary-light); }
@@ -402,12 +421,15 @@ tr:hover { background: var(--bg-light); }
 .dp-clear, .dp-today { border: none; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; padding: 2px 4px; }
 </style>
 <script>
-// 在页面渲染前应用导航折叠状态，避免刷新时侧栏先展开再收起（闪烁）
+// 渲染前决定导航栏的展开/折叠状态：侧栏默认隐藏，只有确认展开时才显示，
+// 这样即使样式生效时机有偏差，也不会出现「先展开再收起」的闪烁
 try {
-  if (localStorage.getItem('tm-nav-collapsed') === '1') {
-    document.documentElement.classList.add('nav-collapsed');
-  }
-} catch (e) {}
+  var _navCollapsed = localStorage.getItem('tm-nav-collapsed') === '1';
+  document.documentElement.classList.toggle('nav-collapsed', _navCollapsed);
+  document.documentElement.classList.toggle('nav-expanded', !_navCollapsed);
+} catch (e) {
+  document.documentElement.classList.add('nav-expanded');
+}
 </script>
 </head>
 <body>
@@ -1716,7 +1738,9 @@ function toggleProjNav() {
 // 折叠状态同时作用到 html（供 CSS 选择器用）与 body / .proj-nav.collapsed
 function _applyProjNavState() {
   document.documentElement.classList.toggle('nav-collapsed', _projNavCollapsed);
+  document.documentElement.classList.toggle('nav-expanded', !_projNavCollapsed);
   document.body.classList.toggle('nav-collapsed', _projNavCollapsed);
+  document.body.classList.toggle('nav-expanded', !_projNavCollapsed);
   const nav = document.getElementById('projNav');
   if (nav) nav.classList.toggle('collapsed', _projNavCollapsed);
   const tg = document.getElementById('projNavToggle');
@@ -1727,6 +1751,7 @@ function restoreProjNavState() {
   let saved = '';
   try { saved = localStorage.getItem('tm-nav-collapsed') || ''; } catch (e) {}
   _projNavCollapsed = (saved === '1') || document.documentElement.classList.contains('nav-collapsed');
+  if (saved === '1') document.documentElement.classList.remove('nav-expanded');
   _applyProjNavState();
 }
 
@@ -2351,7 +2376,8 @@ function renderTasks() {
       const delayCount = activeRecs.filter(r => r.type !== 'status' && r.type !== 'complete').length;
       const statusCount = activeRecs.filter(r => r.type === 'status' || r.type === 'complete').length;
       const pauseCount = (t.pauseRecords || []).length;
-      const delayLabel = delayCount > 0 ? delayCount + ' 次延期' : (statusCount > 0 ? statusCount + ' 次变更' : (pauseCount > 0 ? pauseCount + ' 次暂停' : ''));
+      // 去空格，适配收窄后的延期列
+      const delayLabel = delayCount > 0 ? delayCount + '次延期' : (statusCount > 0 ? statusCount + '次变更' : (pauseCount > 0 ? pauseCount + '次暂停' : ''));
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
       html += `<tr>
         <td>${t.projectName}</td>
