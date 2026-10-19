@@ -4995,15 +4995,72 @@ function showReportModal() {
       <div class="form-group" style="justify-content:flex-end;">
         <label>&nbsp;</label>
         <div style="display:flex; gap:8px;">
-          <button class="btn btn-outline" onclick="copyReportMarkdown()">复制 Markdown</button>
-          <button class="btn btn-outline" onclick="exportReportMarkdown()">导出 .md</button>
-          <button class="btn btn-primary" onclick="exportReportWord()">导出 Word</button>
+          <button class="btn btn-primary" onclick="copyReportMarkdown()">复制 Markdown</button>
+        </div>
+      </div>
+    </div>
+    <div class="filter-bar" style="margin-bottom:12px;">
+      <div class="form-group" style="min-width:100%;">
+        <label>记录类型（取消勾选即不计入汇报）</label>
+        <div id="reportTypeFilters" style="display:flex; flex-wrap:wrap; gap:14px; font-size:13px; color:var(--text);">
+          <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" value="done" onchange="onReportTypeFilterChange()"> 已完成（任务完成、临时事项）</label>
+          <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" value="created" onchange="onReportTypeFilterChange()"> 新增（新建任务）</label>
+          <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" value="pause" onchange="onReportTypeFilterChange()"> 暂停 / 启动</label>
+          <label style="display:flex; align-items:center; gap:5px; cursor:pointer;"><input type="checkbox" value="open" onchange="onReportTypeFilterChange()"> 未完成（计划调整、状态变更、交付件更新）</label>
         </div>
       </div>
     </div>
     <div id="reportBody"></div>
   `, '880px');
+  initReportTypeFilters();
   renderReport();
+}
+
+// ====== 汇报记录类型筛选 ======
+// 四个维度覆盖全部 7 类事件：已完成 / 新增 / 暂停 / 未完成
+const REPORT_TYPE_MAP = {
+  done: ['complete', 'temp'],        // 已完成：任务完成 + 临时事项（已发生的工作）
+  created: ['created'],              // 新增：新建任务
+  pause: ['pause'],                  // 暂停 / 启动
+  open: ['adjust', 'status', 'delivery'] // 未完成：计划调整、状态变更、交付件更新
+};
+const REPORT_TYPE_KEYS = ['done', 'created', 'pause', 'open'];
+
+function initReportTypeFilters() {
+  const box = document.getElementById('reportTypeFilters');
+  if (!box) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('tm-report-types') || 'null'); } catch (e) {}
+  const keys = Array.isArray(saved) ? saved : REPORT_TYPE_KEYS;
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = keys.indexOf(cb.value) !== -1; });
+}
+
+function onReportTypeFilterChange() {
+  const box = document.getElementById('reportTypeFilters');
+  if (!box) return;
+  const keys = [];
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => { if (cb.checked) keys.push(cb.value); });
+  try { localStorage.setItem('tm-report-types', JSON.stringify(keys)); } catch (e) {}
+  renderReport();
+}
+
+// 未勾选的类型直接把当天的事件数组清空 —— 页面、统计、Markdown 三处自动同步
+function applyReportTypeFilter(days, keys) {
+  const allowed = new Set();
+  (keys || []).forEach(k => (REPORT_TYPE_MAP[k] || []).forEach(t => allowed.add(t)));
+  Object.values(days).forEach(d => {
+    Object.keys(d).forEach(t => { if (!allowed.has(t)) d[t] = []; });
+  });
+  return days;
+}
+
+// 当前勾选了哪些维度（用于决定统计卡片显示哪些）
+function getActiveReportKeys() {
+  const box = document.getElementById('reportTypeFilters');
+  if (!box) return REPORT_TYPE_KEYS.slice();
+  const keys = [];
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => { if (cb.checked) keys.push(cb.value); });
+  return keys;
 }
 
 function setReportQuickRange(type) {
@@ -5128,19 +5185,24 @@ function renderReport(byUserAction) {
   _reportRange = { start, end };
 
   const data = loadData();
-  const days = collectReportEvents(data, start, end);
+  const activeKeys = getActiveReportKeys();
+  const days = applyReportTypeFilter(collectReportEvents(data, start, end), activeKeys);
   const counts = countReportEvents(days);
   const total = counts.created + counts.complete + counts.temp + counts.delivery + counts.adjust + counts.status + counts.pause;
 
-  let html = `<div class="stats-grid" style="margin-bottom:16px;">
-    <div class="stat-card"><div class="stat-value">${counts.complete}</div><div class="stat-label">完成任务</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.created}</div><div class="stat-label">新建任务</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.temp}</div><div class="stat-label">新增临时事项</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.delivery}</div><div class="stat-label">交付件更新</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.adjust}</div><div class="stat-label">计划调整</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.status}</div><div class="stat-label">状态变更</div></div>
-    <div class="stat-card"><div class="stat-value">${counts.pause}</div><div class="stat-label">暂停 / 启动</div></div>
-  </div>`;
+  const cards = [];
+  if (activeKeys.indexOf('done') !== -1) {
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.complete}</div><div class="stat-label">完成任务</div></div>`);
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.temp}</div><div class="stat-label">临时事项</div></div>`);
+  }
+  if (activeKeys.indexOf('created') !== -1) cards.push(`<div class="stat-card"><div class="stat-value">${counts.created}</div><div class="stat-label">新建任务</div></div>`);
+  if (activeKeys.indexOf('open') !== -1) {
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.delivery}</div><div class="stat-label">交付件更新</div></div>`);
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.adjust}</div><div class="stat-label">计划调整</div></div>`);
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.status}</div><div class="stat-label">状态变更</div></div>`);
+  }
+  if (activeKeys.indexOf('pause') !== -1) cards.push(`<div class="stat-card"><div class="stat-value">${counts.pause}</div><div class="stat-label">暂停 / 启动</div></div>`);
+  let html = `<div class="stats-grid" style="margin-bottom:16px;">${cards.join('')}</div>`;
 
   if (total === 0) {
     html += '<div class="empty-state"><p>该时间段内没有可汇报的记录</p></div>';
@@ -5223,12 +5285,17 @@ function renderReport(byUserAction) {
 // 生成 Markdown 版汇报（供复制粘贴分享）
 function buildReportMarkdown(start, end) {
   const data = loadData();
-  const days = collectReportEvents(data, start, end);
+  const days = applyReportTypeFilter(collectReportEvents(data, start, end), getActiveReportKeys());
   const counts = countReportEvents(days);
+  const active = getActiveReportKeys();
   const mdSafe = s => String(s == null ? '' : s).replace(/\r?\n/g, ' ');
   let md = `# 周期汇报（${start} ~ ${end}）\n\n`;
-  md += `- 完成任务：${counts.complete} 项\n- 新建任务：${counts.created} 项\n- 新增临时事项：${counts.temp} 项\n- 交付件更新：${counts.delivery} 项\n`;
-  md += `- 计划调整：${counts.adjust} 次\n- 状态变更：${counts.status} 次\n- 暂停 / 启动：${counts.pause} 次\n\n`;
+  const sum = [];
+  if (active.indexOf('done') !== -1) sum.push(`- 完成任务：${counts.complete} 项`, `- 临时事项：${counts.temp} 项`);
+  if (active.indexOf('created') !== -1) sum.push(`- 新建任务：${counts.created} 项`);
+  if (active.indexOf('open') !== -1) sum.push(`- 交付件更新：${counts.delivery} 项`, `- 计划调整：${counts.adjust} 次`, `- 状态变更：${counts.status} 次`);
+  if (active.indexOf('pause') !== -1) sum.push(`- 暂停 / 启动：${counts.pause} 次`);
+  md += sum.join('\n') + '\n\n';
   const sortedDays = Object.keys(days).sort((a, b) => b.localeCompare(a));
   if (sortedDays.length === 0) { md += '该时间段内没有可汇报的记录。\n'; return md; }
   sortedDays.forEach(day => {
@@ -5280,120 +5347,6 @@ function fallbackCopyText(text, done) {
   ta.select();
   try { document.execCommand('copy'); done(); } catch (e) { showToast('复制失败，请手动选择文本复制', 'error'); }
   document.body.removeChild(ta);
-}
-
-// ====== 汇报导出 ======
-// 触发浏览器下载
-function downloadReportFile(filename, content, mime) {
-  const blob = new Blob(['﻿' + content], { type: (mime || 'text/plain') + ';charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-function _reportRangeOrWarn() {
-  const startEl = document.getElementById('reportDateStart');
-  const endEl = document.getElementById('reportDateEnd');
-  const start = startEl ? startEl.value : '';
-  const end = endEl ? endEl.value : '';
-  if (!start || !end) { showToast('请先选择日期范围', 'error'); return null; }
-  if (start > end) { showToast('开始日期不能晚于结束日期', 'error'); return null; }
-  return { start, end };
-}
-
-function exportReportMarkdown() {
-  const r = _reportRangeOrWarn();
-  if (!r) return;
-  const md = buildReportMarkdown(r.start, r.end);
-  downloadReportFile(`周期汇报_${r.start}_${r.end}.md`, md, 'text/markdown');
-  showToast('已导出 Markdown 文件');
-}
-
-// Word 兼容的 HTML（.doc）—— 用内联样式与表格，Word 打开即可正常排版
-function buildReportHtml(start, end) {
-  const data = loadData();
-  const days = collectReportEvents(data, start, end);
-  const counts = countReportEvents(days);
-  const esc = s => String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  let h = `<h2 style="font-family:宋体;">周期汇报（${esc(start)} ~ ${esc(end)}）</h2>`;
-  h += '<p style="font-family:宋体;font-size:11pt;line-height:1.9;">';
-  h += `完成任务：<b>${counts.complete}</b> 项　|　新建任务：<b>${counts.created}</b> 项　|　新增临时事项：<b>${counts.temp}</b> 项<br>`;
-  h += `交付件更新：<b>${counts.delivery}</b> 项　|　计划调整：<b>${counts.adjust}</b> 次　|　状态变更：<b>${counts.status}</b> 次　|　暂停/启动：<b>${counts.pause}</b> 次`;
-  h += '</p>';
-
-  Object.keys(days).sort((a, b) => b.localeCompare(a)).forEach(day => {
-    const d = days[day];
-    const completedIds = new Set(d.complete.map(e => e.task.id));
-    const mergedIds = new Set(d.created.filter(e => completedIds.has(e.task.id)).map(e => e.task.id));
-    const rows = [];
-    d.created.forEach(e => rows.push({
-      tag: mergedIds.has(e.task.id) ? '新建 / 当日完成' : '新建',
-      main: `[${esc(e.task.projectName)}] ${esc(e.task.taskName)}`,
-      meta: e.time || '--:--'
-    }));
-    d.complete.forEach(e => {
-      if (mergedIds.has(e.task.id)) return;
-      rows.push({
-        tag: '完成',
-        main: `[${esc(e.task.projectName)}] ${esc(e.task.taskName)}`,
-        meta: `${e.time || '--:--'}${e.reason ? ' · ' + esc(e.reason) : ''}`
-      });
-    });
-    d.temp.forEach(e => rows.push({
-      tag: '临时事项',
-      main: esc(e.item.description),
-      meta: `${e.time || '--:--'} · 时长 ${esc(e.dur)} · 影响 ${esc(e.scope)}`
-    }));
-    d.delivery.forEach(e => rows.push({
-      tag: '交付件更新',
-      main: esc(e.item.description),
-      meta: `${e.time || '--:--'} · 处理 ${esc(e.dur)} · 影响 ${esc(e.scope)}`
-    }));
-    d.adjust.forEach(e => rows.push({
-      tag: '计划调整',
-      main: `[${esc(e.task.projectName)}] ${esc(e.task.taskName)}`,
-      meta: `${e.time || '--:--'} → ${formatDate(e.to)}`
-    }));
-    d.status.forEach(e => rows.push({
-      tag: '状态变更',
-      main: `[${esc(e.task.projectName)}] ${esc(e.task.taskName)}`,
-      meta: `${e.time || '--:--'} · ${esc(e.from)} → ${esc(e.to)}`
-    }));
-    d.pause.forEach(e => rows.push({
-      tag: e.kind === 'pause' ? '暂停' : '启动',
-      main: `[${esc(e.task.projectName)}] ${esc(e.task.taskName)}`,
-      meta: `${e.time || '--:--'}${e.reason ? ' · ' + esc(e.reason) : ''}`
-    }));
-    if (!rows.length) return;
-    h += `<h3 style="font-family:宋体;font-size:12pt;margin:16pt 0 6pt;">${esc(day)}</h3>`;
-    h += '<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse;font-family:宋体;font-size:10.5pt;width:100%;">';
-    h += '<tr style="background-color:#f0f0f0;"><th style="width:110px;">类型</th><th>内容</th><th style="width:210px;">说明</th></tr>';
-    rows.forEach(r => {
-      h += `<tr><td>${esc(r.tag)}</td><td>${r.main}</td><td>${esc(r.meta)}</td></tr>`;
-    });
-    h += '</table>';
-  });
-  return h;
-}
-
-function exportReportWord() {
-  const r = _reportRangeOrWarn();
-  if (!r) return;
-  const body = buildReportHtml(r.start, r.end);
-  const doc = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'
-    + '<head><meta charset="utf-8"><title>周期汇报</title>'
-    + '<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->'
-    + '<style>table{border-collapse:collapse}td,th{border:1px solid #999}</style>'
-    + '</head><body>' + body + '</body></html>';
-  downloadReportFile(`周期汇报_${r.start}_${r.end}.doc`, doc, 'application/msword');
-  showToast('已导出 Word 文档（.doc），可直接用 Word 打开');
 }
 
 // ====== Data Management ======
