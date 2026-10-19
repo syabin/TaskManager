@@ -1970,7 +1970,8 @@ function saveTask(taskId, projectName) {
       status,
       delayRecords: [],
       pauseRecords: [],
-      currentEndDate: plannedEndDate
+      currentEndDate: plannedEndDate,
+      createdAt: new Date().toISOString() // 汇报里的「新建」记录依据
     };
     data.tasks.push(newTask);
     // 单次补录：继承「开始时间 → 现在」内、影响所有任务的临时事项
@@ -4995,7 +4996,7 @@ function showReportModal() {
         <label>&nbsp;</label>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-outline" onclick="copyReportMarkdown()">复制 Markdown</button>
-          <button class="btn btn-primary" onclick="renderReport()">生成汇报</button>
+          <button class="btn btn-primary" onclick="renderReport(true)">生成汇报</button>
         </div>
       </div>
     </div>
@@ -5030,11 +5031,16 @@ function setReportQuickRange(type) {
 // 预期事件 / 预期交付件（尚未补日期）不入汇报。
 function collectReportEvents(data, start, end) {
   const days = {};
-  const ensure = d => { if (!days[d]) days[d] = { complete: [], temp: [], delivery: [], adjust: [], status: [], pause: [] }; return days[d]; };
+  const ensure = d => { if (!days[d]) days[d] = { created: [], complete: [], temp: [], delivery: [], adjust: [], status: [], pause: [] }; return days[d]; };
   const inRange = d => d && d >= start && d <= end;
   const timeOf = v => (v && v.length >= 16) ? v.slice(11, 16) : '';
 
   data.tasks.forEach(t => {
+    // 新建记录：createdAt 是 UTC ISO 字符串，转本地日期后再判断是否落在区间内
+    const cDT = isoToLocalDT(t.createdAt);
+    if (cDT && inRange(dOnly(cDT))) {
+      ensure(dOnly(cDT)).created.push({ task: t, time: timeOf(cDT), sortKey: cDT });
+    }
     activeDelayRecords(t).forEach(r => {
       const day = dOnly(r.date);
       if (!inRange(day)) return;
@@ -5078,16 +5084,27 @@ function collectReportEvents(data, start, end) {
 
   // 每天内按时间先后排序
   Object.keys(days).forEach(d => {
-    ['complete', 'temp', 'delivery', 'adjust', 'status', 'pause'].forEach(k => {
+    ['created', 'complete', 'temp', 'delivery', 'adjust', 'status', 'pause'].forEach(k => {
       days[d][k].sort((a, b) => (a.sortKey || '').localeCompare(b.sortKey || ''));
     });
   });
   return days;
 }
 
+// UTC ISO 时间 → 本地 'YYYY-MM-DDTHH:mm'（汇报里的「新建」时间需要按本地日历归日）
+function isoToLocalDT(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${fmtDateLocal(d)}T${hh}:${mm}`;
+}
+
 function countReportEvents(days) {
-  const c = { complete: 0, temp: 0, delivery: 0, adjust: 0, status: 0, pause: 0 };
+  const c = { created: 0, complete: 0, temp: 0, delivery: 0, adjust: 0, status: 0, pause: 0 };
   Object.values(days).forEach(d => {
+    c.created += d.created.length;
     c.complete += d.complete.length;
     c.temp += d.temp.length;
     c.delivery += d.delivery.length;
@@ -5098,7 +5115,7 @@ function countReportEvents(days) {
   return c;
 }
 
-function renderReport() {
+function renderReport(byUserAction) {
   const startEl = document.getElementById('reportDateStart');
   const endEl = document.getElementById('reportDateEnd');
   const body = document.getElementById('reportBody');
@@ -5112,10 +5129,11 @@ function renderReport() {
   const data = loadData();
   const days = collectReportEvents(data, start, end);
   const counts = countReportEvents(days);
-  const total = counts.complete + counts.temp + counts.delivery + counts.adjust + counts.status + counts.pause;
+  const total = counts.created + counts.complete + counts.temp + counts.delivery + counts.adjust + counts.status + counts.pause;
 
   let html = `<div class="stats-grid" style="margin-bottom:16px;">
     <div class="stat-card"><div class="stat-value">${counts.complete}</div><div class="stat-label">完成任务</div></div>
+    <div class="stat-card"><div class="stat-value">${counts.created}</div><div class="stat-label">新建任务</div></div>
     <div class="stat-card"><div class="stat-value">${counts.temp}</div><div class="stat-label">新增临时事项</div></div>
     <div class="stat-card"><div class="stat-value">${counts.delivery}</div><div class="stat-label">交付件更新</div></div>
     <div class="stat-card"><div class="stat-value">${counts.adjust}</div><div class="stat-label">计划调整</div></div>
@@ -5126,49 +5144,67 @@ function renderReport() {
   if (total === 0) {
     html += '<div class="empty-state"><p>该时间段内没有可汇报的记录</p></div>';
     body.innerHTML = html;
+    if (byUserAction) showToast(`已生成 ${start} ~ ${end} 的汇报（无记录）`);
     return;
   }
 
   const weekNames = ['日', '一', '二', '三', '四', '五', '六'];
-  const itemHtml = (tagStyle, tagText, main, meta) =>
-    `<div class="report-item"><span class="report-item-tag" style="${tagStyle}">${tagText}</span><span class="report-item-main">${main}</span><span class="report-item-meta">${meta}</span></div>`;
+  // tag 允许是多个标签的 HTML 串（同一任务当天「新建 + 完成」时并排显示两个标签）
+  const itemHtml = (tag, main, meta) =>
+    `<div class="report-item">${tag}<span class="report-item-main">${main}</span><span class="report-item-meta">${meta}</span></div>`;
+  const TAG_CREATED = '<span class="report-item-tag" style="background:#e0f2fe;color:#075985;">🆕 新建</span>';
+  const TAG_COMPLETE = '<span class="report-item-tag" style="background:#dcfce7;color:#166534;">✅ 完成</span>';
+  const TAG_CREATED_DONE = TAG_CREATED + '<span class="report-item-tag" style="background:#dcfce7;color:#166534;">✅ 当日完成</span>';
 
   Object.keys(days).sort((a, b) => b.localeCompare(a)).forEach(day => {
     const d = days[day];
-    const dayTotal = d.complete.length + d.temp.length + d.delivery.length + d.adjust.length + d.status.length + d.pause.length;
+    // 当天既新建又完成的任务：合并成一条，避免同一任务占两行
+    const completedIds = new Set(d.complete.map(e => e.task.id));
+    const mergedIds = new Set(d.created.filter(e => completedIds.has(e.task.id)).map(e => e.task.id));
+    const dayTotal = d.created.length + d.complete.length - mergedIds.size
+      + d.temp.length + d.delivery.length + d.adjust.length + d.status.length + d.pause.length;
     const w = weekNames[new Date(day + 'T00:00:00').getDay()];
     html += `<div class="report-day">
       <div class="report-day-title"><span>${day} 周${w}</span><span class="report-day-count">${dayTotal} 条记录</span></div>
       <div class="report-day-body">`;
+    // 新建记录：若该任务当天也已完成，合并为一条并显示两个标签，完成行不再重复出现
+    d.created.forEach(e => {
+      const alsoDone = mergedIds.has(e.task.id);
+      html += itemHtml(alsoDone ? TAG_CREATED_DONE : TAG_CREATED,
+        `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
+        `${e.time || '--:--'}${alsoDone ? ' · 新建并当日完成' : ''}`);
+    });
     d.complete.forEach(e => {
-      html += itemHtml('background:#dcfce7;color:#166534;', '✅ 完成',
+      if (mergedIds.has(e.task.id)) return; // 已与新建记录合并
+      html += itemHtml(TAG_COMPLETE,
         `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
         `${e.time || '--:--'}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
     });
     d.temp.forEach(e => {
-      html += itemHtml('background:#fff3cd;color:#856404;', '📝 临时事项',
+      html += itemHtml('<span class="report-item-tag" style="background:#fff3cd;color:#856404;">📝 临时事项</span>',
         escAttr(e.item.description),
         `${e.time || '--:--'} · 时长 ${escAttr(e.dur)} · 影响 ${escAttr(e.scope)}`);
     });
     d.delivery.forEach(e => {
-      html += itemHtml('background:#dbeafe;color:#1d4ed8;', '📦 交付件更新',
+      html += itemHtml('<span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>',
         escAttr(e.item.description),
         `${e.time || '--:--'} · 处理 ${escAttr(e.dur)} · 影响 ${escAttr(e.scope)}`);
     });
     d.adjust.forEach(e => {
-      html += itemHtml('background:#d1ecf1;color:#0c5460;', '🔧 计划调整',
+      html += itemHtml('<span class="report-item-tag" style="background:#d1ecf1;color:#0c5460;">🔧 计划调整</span>',
         `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
         `${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
     });
     d.status.forEach(e => {
-      html += itemHtml('background:#ede9fe;color:#5b21b6;', '🔄 状态变更',
+      html += itemHtml('<span class="report-item-tag" style="background:#ede9fe;color:#5b21b6;">🔄 状态变更</span>',
         `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
         `${e.time || '--:--'} · ${escAttr(e.from)} → ${escAttr(e.to)}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
     });
     d.pause.forEach(e => {
       const isPause = e.kind === 'pause';
-      html += itemHtml(isPause ? 'background:#fde68a;color:#92400e;' : 'background:#d1ecf1;color:#0c5460;',
-        isPause ? '⏸ 暂停' : '▶ 启动',
+      html += itemHtml(isPause
+          ? '<span class="report-item-tag" style="background:#fde68a;color:#92400e;">⏸ 暂停</span>'
+          : '<span class="report-item-tag" style="background:#d1ecf1;color:#0c5460;">▶ 启动</span>',
         `[${escAttr(e.task.projectName)}] ${escAttr(e.task.taskName)}`,
         `${e.time || '--:--'}${e.reason ? ' · ' + escAttr(e.reason) : ''}`);
     });
@@ -5176,6 +5212,11 @@ function renderReport() {
   });
 
   body.innerHTML = html;
+  // 用户主动点击「生成汇报」时给出明确反馈（否则内容无变化会让人以为按钮失效）
+  if (byUserAction) {
+    showToast(`已按 ${start} ~ ${end} 生成汇报：完成 ${counts.complete} · 新建 ${counts.created} · 临时事项 ${counts.temp} · 其他 ${counts.delivery + counts.adjust + counts.status + counts.pause}`);
+    body.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 // 生成 Markdown 版汇报（供复制粘贴分享）
@@ -5185,14 +5226,25 @@ function buildReportMarkdown(start, end) {
   const counts = countReportEvents(days);
   const mdSafe = s => String(s == null ? '' : s).replace(/\r?\n/g, ' ');
   let md = `# 周期汇报（${start} ~ ${end}）\n\n`;
-  md += `- 完成任务：${counts.complete} 项\n- 新增临时事项：${counts.temp} 项\n- 交付件更新：${counts.delivery} 项\n`;
+  md += `- 完成任务：${counts.complete} 项\n- 新建任务：${counts.created} 项\n- 新增临时事项：${counts.temp} 项\n- 交付件更新：${counts.delivery} 项\n`;
   md += `- 计划调整：${counts.adjust} 次\n- 状态变更：${counts.status} 次\n- 暂停 / 启动：${counts.pause} 次\n\n`;
   const sortedDays = Object.keys(days).sort((a, b) => b.localeCompare(a));
   if (sortedDays.length === 0) { md += '该时间段内没有可汇报的记录。\n'; return md; }
   sortedDays.forEach(day => {
     const d = days[day];
     md += `## ${day}\n\n`;
-    d.complete.forEach(e => { md += `- ✅ 完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}${e.time ? '（' + e.time + '）' : ''}${e.reason ? ' — ' + mdSafe(e.reason) : ''}\n`; });
+    // 与页面一致：当天既新建又完成的任务合并成一条，两个标签
+    const completedIds = new Set(d.complete.map(e => e.task.id));
+    const mergedIds = new Set(d.created.filter(e => completedIds.has(e.task.id)).map(e => e.task.id));
+    d.created.forEach(e => {
+      md += mergedIds.has(e.task.id)
+        ? `- 🆕 新建 / ✅ 当日完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · 新建并当日完成）\n`
+        : `- 🆕 新建 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'}）\n`;
+    });
+    d.complete.forEach(e => {
+      if (mergedIds.has(e.task.id)) return;
+      md += `- ✅ 完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}${e.time ? '（' + e.time + '）' : ''}${e.reason ? ' — ' + mdSafe(e.reason) : ''}\n`;
+    });
     d.temp.forEach(e => { md += `- 📝 临时事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 时长 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.delivery.forEach(e => { md += `- 📦 交付件更新 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 处理 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.adjust.forEach(e => { md += `- 🔧 计划调整 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
@@ -6322,7 +6374,9 @@ function executeBatchImport() {
       plannedEndDate: item.plannedEndDate,
       status: item.status,
       delayRecords: [],
-      currentEndDate: item.plannedEndDate
+      pauseRecords: [],
+      currentEndDate: item.plannedEndDate,
+      createdAt: new Date().toISOString()
     });
   });
   saveData(data);
@@ -6524,7 +6578,8 @@ function executeBatchSupplement() {
       status: item.status,
       delayRecords: [],
       pauseRecords: [],
-      currentEndDate: item.plannedEndDate
+      currentEndDate: item.plannedEndDate,
+      createdAt: new Date().toISOString()
     };
     data.tasks.push(task);
     // 任务有开始时间 → 从开始时间起算临时事项；否则退回「计划编制时间」
