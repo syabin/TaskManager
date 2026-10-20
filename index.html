@@ -746,6 +746,8 @@ try {
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
       <button class="btn btn-outline" id="ghBtnTest" onclick="ghTestConn()">测试连接</button>
       <button class="btn btn-primary" id="ghBtnUpload" onclick="ghUpload()">⬆ 上传到 GitHub</button>
+      <button class="btn btn-outline" id="ghBtnDiff" onclick="ghShowDiff()" title="拉取云端数据，与本地逐项对比后展示差异">🔍 对比云端差异</button>
+      <button class="btn btn-danger" id="ghBtnForce" onclick="ghForceUpload()" title="检测到冲突时，普通上传会拒绝覆盖；此按钮用本地数据强制覆盖远端（远端改动将丢失，且无法自动恢复）">⚠ 强制覆盖上传</button>
       <button class="btn btn-secondary" id="ghBtnPull" onclick="ghPull()">⬇ 从 GitHub 拉取</button>
     </div>
     <div id="ghStatus" style="font-size:12px; color:#666; min-height:18px;">尚未同步。</div>
@@ -5668,9 +5670,142 @@ async function ghRepairAllArchiveDirs() {
   showToast(`修复完成：改名 ${ok} 个${copied ? `，复制 ${copied} 个` : ''}${fail ? `，失败 ${fail} 个` : ''}`);
 }
 
-// ====== GitHub 自动静默同步 ======
+// ====== 云端差异对比 ======
+const GH_TASK_FIELDS = [
+  ['projectName', '项目号'], ['projectTitle', '项目名称'], ['taskName', '任务名称'],
+  ['status', '状态'], ['startDate', '开始时间'], ['plannedEndDate', '计划完成'],
+  ['adjustedEndDate', '计划调整'], ['currentEndDate', '当前完成'], ['unplanned', '计划外']
+];
+
+function computeDataDiff(local, remote, remoteSha) {
+  const res = { tasks: { added: [], removed: [], changed: [] }, temp: { added: 0, removed: 0 }, delivery: { added: 0, removed: 0 }, conflicts: false };
+  const sync = ghGetSync();
+
+  const L = new Map((local.tasks || []).map(t => [t.id, t]));
+  const R = new Map(((remote && remote.tasks) || []).map(t => [t.id, t]));
+  L.forEach((t, id) => {
+    if (!R.has(id)) { res.tasks.added.push(t); return; }
+    const r = R.get(id);
+    const fields = [];
+    GH_TASK_FIELDS.forEach(([k, label]) => {
+      const a = t[k], b = r[k];
+      if (k === 'unplanned') { if (!!a !== !!b) fields.push(label); return; }
+      if ((a || '') !== (b || '')) fields.push(label);
+    });
+    const dl = (t.delayRecords || []).length, dr = (r.delayRecords || []).length;
+    if (dl !== dr) fields.push(`延期记录(${dr}→${dl})`);
+    if (fields.length) res.tasks.changed.push({ task: t, fields });
+  });
+  R.forEach((r, id) => { if (!L.has(id)) res.tasks.removed.push(r); });
+
+  const lt = new Set((local.tempItems || []).map(x => x.id));
+  const rt = new Set(((remote && remote.tempItems) || []).map(x => x.id));
+  res.temp.added = [...lt].filter(id => !rt.has(id)).length;
+  res.temp.removed = [...rt].filter(id => !lt.has(id)).length;
+
+  const ld = new Set((local.deliveryItems || []).map(x => x.id));
+  const rd = new Set(((remote && remote.deliveryItems) || []).map(x => x.id));
+  res.delivery.added = [...ld].filter(id => !rd.has(id)).length;
+  res.delivery.removed = [...rd].filter(id => !ld.has(id)).length;
+
+  res.conflicts = !!(remoteSha && sync.sha && sync.sha !== remoteSha);
+  return res;
+}
+
+async function ghShowDiff() {
+  const cfg = ghConfig();
+  setGhStatus('正在对比云端差异…');
+  let remote = null;
+  try {
+    remote = await ghFetchRemote();
+  } catch (e) {
+    if (e.status === 404) {
+      openModal(`
+        <div class="modal-header"><h3>云端差异对比</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+        <div class="empty-state"><p>远端还没有数据文件，本地有 <b>${loadData().tasks.length}</b> 个任务</p>
+        <p>直接点「⬆ 上传到 GitHub」即可创建</p></div>`);
+      setGhStatus('远端还没有数据文件');
+      return;
+    }
+    handleGhError(e);
+    return;
+  }
+  let remoteObj;
+  try { remoteObj = JSON.parse(remote.text); }
+  catch (e) { showToast('远端文件不是合法 JSON，无法对比', 'error'); setGhStatus('远端文件解析失败'); return; }
+
+  const local = loadData();
+  const d = computeDataDiff(local, remoteObj, remote.sha);
+  const totalChanged = d.tasks.added.length + d.tasks.removed.length + d.tasks.changed.length + d.temp.added + d.temp.removed + d.delivery.added + d.delivery.removed;
+
+  const row = (tag, color, bg, text) => `<div style="padding:6px 10px;border-left:3px solid ${color};background:${bg};margin-bottom:4px;border-radius:4px;font-size:13px;">
+      <span style="font-weight:600;color:${color};">${tag}</span> ${text}</div>`;
+
+  let body = '';
+  if (d.conflicts) {
+    body += `<div style="background:#fff3cd;border:1px solid #ffe08a;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:13px;">
+      <b>⚠ 存在冲突</b>：云端已被其他设备改动，普通上传会拒绝覆盖。<br>
+      本机上次同步 sha：<code>${(ghGetSync().sha || '').slice(0, 7) || '—'}</code>　云端当前 sha：<code>${(remote.sha || '').slice(0, 7)}</code><br><br>
+      看完差异后二选一：采纳云端 → 点「⬇ 从 GitHub 拉取」；以本地为准 → 点下方「⚠ 强制覆盖上传」。
+    </div>`;
+  }
+  body += `<div class="stats-grid report-stats" style="margin-bottom:12px;">
+    <div class="stat-card"><div class="stat-value" style="color:#28a745;">+${d.tasks.added.length}</div><div class="stat-label">本地新增任务</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:#dc3545;">-${d.tasks.removed.length}</div><div class="stat-label">云端独有的任务</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:#f59e0b;">${d.tasks.changed.length}</div><div class="stat-label">内容有差异</div></div>
+    <div class="stat-card"><div class="stat-value">${d.temp.added - d.temp.removed >= 0 ? '+' : ''}${d.temp.added - d.temp.removed}</div><div class="stat-label">临时事项净差</div></div>
+    <div class="stat-card"><div class="stat-value">${d.delivery.added - d.delivery.removed >= 0 ? '+' : ''}${d.delivery.added - d.delivery.removed}</div><div class="stat-label">交付件更新净差</div></div>
+  </div>`;
+
+  if (totalChanged === 0) {
+    body += '<div class="empty-state"><p>本地与云端数据完全一致 🎉</p></div>';
+  } else {
+    body += '<div style="max-height:46vh;overflow-y:auto;font-size:13px;">';
+    d.tasks.added.forEach(t => {
+      body += row('本地新增', '#28a745', '#f0fff4', `[${escAttr(t.projectName)}] ${escAttr(t.taskName)} <span style="color:var(--text-muted);">· ${t.status}</span>`);
+    });
+    d.tasks.removed.forEach(t => {
+      body += row('云端独有', '#dc3545', '#fff5f5', `[${escAttr(t.projectName)}] ${escAttr(t.taskName)} <span style="color:var(--text-muted);">· ${t.status}</span> <span style="color:var(--text-muted);">（本地已删除）</span>`);
+    });
+    d.tasks.changed.forEach(c => {
+      body += row('内容差异', '#f59e0b', '#fffdf0', `[${escAttr(c.task.projectName)}] ${escAttr(c.task.taskName)} <span style="color:var(--text-muted);">· ${escAttr(c.fields.join('、'))}</span>`);
+    });
+    body += '</div>';
+  }
+  body += `<div style="text-align:right;margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
+    <button class="btn btn-outline" onclick="closeModal()">关闭</button>
+    <button class="btn btn-outline" onclick="closeModal(); ghPull()">⬇ 采纳云端（拉取覆盖本地）</button>
+    <button class="btn btn-danger" onclick="closeModal(); ghForceUpload()">⚠ 强制覆盖上传</button>
+  </div>`;
+
+  openModal(`
+    <div class="modal-header"><h3>云端差异对比</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">仓库 ${escAttr(cfg.repo)} · ${escAttr(cfg.path)} · 分支 ${escAttr(cfg.branch)}</p>
+    ${body}`, '860px');
+  setGhStatus(totalChanged === 0 ? '本地与云端一致' : `存在 ${totalChanged} 处差异`);
+}
+
+// 强制覆盖：用本地数据替换云端（远端其他设备的改动会丢失）
+async function ghForceUpload() {
+  const cfg = ghConfig();
+  if (!confirm(
+    '确定强制覆盖云端数据？\n\n' +
+    `仓库：${cfg.repo}\n文件：${cfg.path}（分支 ${cfg.branch}）\n\n` +
+    '云端当前内容将被本地数据完全替换，且无法自动恢复。\n' +
+    '建议先点「🔍 对比云端差异」确认要覆盖什么。'
+  )) return;
+  setGhBusy(true);
+  try {
+    const res = await ghUpload({ force: true });
+    if (res && res.ok) {
+      _ghLastSyncedFingerprint = ghLocalFingerprint();
+      if (ghAutoSyncEnabled()) ghRestoreAutoStatus();
+    }
+  } finally { setGhBusy(false); }
+}
 // 勾选「编辑后自动静默上传」后：每次 saveData（所有编辑的统一入口）后延迟 3 秒静默上传，
 // 连续编辑会合并成一次；不弹窗、不打扰，结果只在顶栏显示一行状态。
+// ====== GitHub 自动静默同步 ======
 var _ghAutoTimer = null;
 var _ghAutoBusy = false;
 var _ghSuppressAuto = false;       // 拉取 / 手动上传期间抑制自动同步，避免循环
@@ -5842,7 +5977,7 @@ function updateGhStatus() {
 }
 
 function setGhBusy(busy) {
-  ['ghBtnTest', 'ghBtnUpload', 'ghBtnPull'].forEach(function(id) {
+  ['ghBtnTest', 'ghBtnUpload', 'ghBtnPull', 'ghBtnDiff', 'ghBtnForce'].forEach(function(id) {
     const el = document.getElementById(id);
     if (el) el.disabled = busy;
   });
@@ -6154,9 +6289,11 @@ async function ghDownloadAttachments(cfg, data) {
 
 async function ghUpload(opts) {
   // opts.silent = true 时用于自动同步：不弹任何确认框、不打扰，结果只写到顶栏
+  // opts.force  = true 时强制覆盖远端：跳过冲突检测与二次确认（按钮本身已做过确认）
   const silent = !!(opts && opts.silent);
+  const force = !!(opts && opts.force);
   const cfg = ghConfig();
-  if (!silent && !confirm(`确定把当前数据上传到 ${cfg.repo} 的 ${cfg.path}（分支 ${cfg.branch}）？`)) {
+  if (!silent && !force && !confirm(`确定把当前数据上传到 ${cfg.repo} 的 ${cfg.path}（分支 ${cfg.branch}）？`)) {
     return { ok: false, reason: 'cancelled' };
   }
   ghSaveConfig();
@@ -6168,29 +6305,31 @@ async function ghUpload(opts) {
     catch (e) { if (e.status !== 404) throw e; }
 
     const sync = ghGetSync();
-    if (remote && sync.sha && sync.sha !== remote.sha) {
+    if (!force && remote && sync.sha && sync.sha !== remote.sha) {
       // 冲突：远端已被其他设备改动 → 拒绝覆盖
       setGhStatus('<span style="color:#dc3545;font-weight:600;">检测到冲突，已拒绝覆盖（远端已被其他设备改动）</span>');
       if (!silent) {
         alert('检测到冲突，已拒绝覆盖。\n\n' +
           '本机上次同步的远端 sha：' + (sync.sha || '').slice(0, 7) + '\n' +
           '远端当前 sha：' + remote.sha.slice(0, 7) + '\n\n' +
-          '为避免丢失其他设备的改动，本次上传已取消。\n建议先「⬇ 从 GitHub 拉取」查看远端内容，再决定如何处理。');
+          '为避免丢失其他设备的改动，本次上传已取消。\n' +
+          '可先点「🔍 对比云端差异」看清改了什么，再决定：\n' +
+          '· 采纳远端 → 点「⬇ 从 GitHub 拉取」\n' +
+          '· 以本地为准 → 点「⚠ 强制覆盖上传」');
       }
       return { ok: false, reason: 'conflict' };
     }
-    if (remote && !sync.sha) {
-      // 静默模式不弹确认，交给顶栏提示用户手动处理
+    if (remote && !sync.sha && !force) {
       if (silent) return { ok: false, reason: 'need-confirm' };
       const ok = confirm('远端已存在数据文件，但本机没有同步记录（可能由其他设备上传）。\n继续将用本地数据覆盖远端，确定吗？');
       if (!ok) return { ok: false, reason: 'cancelled' };
-    } else if (!remote && sync.sha) {
+    } else if (!remote && sync.sha && !force) {
       if (silent) return { ok: false, reason: 'need-confirm' };
       const ok = confirm('远端数据文件已不存在（可能被删除），将重新创建。确定吗？');
       if (!ok) return { ok: false, reason: 'cancelled' };
     }
 
-    setGhStatus('正在上传…');
+    setGhStatus('正在上传…' + (force ? '（强制覆盖）' : '') + '…');
     const body = {
       message: 'chore(sync): 更新任务数据 ' + new Date().toLocaleString('zh-CN'),
       content: ghB64Encode(JSON.stringify(loadData(), null, 2)),
@@ -6218,11 +6357,11 @@ async function ghUpload(opts) {
       }
     }
     ghSetSync({ sha: newSha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote, attDetails: attDetails });
-    setGhStatus('<span style="color:#198754;">上传成功，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
+    setGhStatus('<span style="color:#198754;">' + (force ? '强制覆盖成功' : '上传成功') + '，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
     if (silent) {
       return { ok: true, sha: newSha, att: attNote };
     }
-    showToast('已上传到 GitHub' + (cfg.syncAttachments ? '（含附件）' : ''));
+    showToast((force ? '已强制覆盖远端数据' : '已上传到 GitHub') + (cfg.syncAttachments ? '（含附件）' : ''));
     updateGhStatus();
     // 手动同步后本地与云端一致，避免紧接着再触发一次自动上传
     _ghLastSyncedFingerprint = ghLocalFingerprint();
