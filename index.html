@@ -2013,6 +2013,19 @@ function jumpToTaskFromTemp(itemId) {
   }, 80);
 }
 
+// 项目名称按「项目号」共享：与该项目下其他任务保持一致，返回被同步的任务数
+function syncProjectTitleAcrossTasks(data, projectName, title, exceptTaskId) {
+  let n = 0;
+  (data.tasks || []).forEach(t => {
+    if (exceptTaskId && t.id === exceptTaskId) return;
+    if (t.projectName === projectName && (t.projectTitle || '') !== title) {
+      t.projectTitle = title;
+      n++;
+    }
+  });
+  return n;
+}
+
 function saveTask(taskId, projectName) {
   const projectNameEl = document.getElementById('mTaskProject');
   const inputProjectName = projectNameEl ? projectNameEl.value.trim() : (projectName || '').trim();
@@ -2028,12 +2041,15 @@ function saveTask(taskId, projectName) {
   if (!inputProjectName || !taskName) { showToast('请填写项目号和任务名称', 'error'); return; }
 
   const data = loadData();
+  let titleSynced = 0;
   if (taskId) {
     const task = data.tasks.find(t => t.id === taskId);
     if (task) {
       const prevStatus = task.status;
       task.projectName = inputProjectName;
       task.projectTitle = projectTitle;
+      // 项目名称是项目级共享的：改动后同步该项目下其他任务，避免同一项目出现两种名称
+      titleSynced = syncProjectTitleAcrossTasks(data, inputProjectName, projectTitle, taskId);
       task.taskName = taskName;
       task.startDate = startDate;
       task.plannedEndDate = plannedEndDate;
@@ -2081,6 +2097,10 @@ function saveTask(taskId, projectName) {
       unplanned: isUnplanned
     };
     data.tasks.push(newTask);
+    // 新建任务时填的项目名称同样是项目级的：与该项目已有任务对齐（避免同一项目两种名称）
+    if ((data.tasks || []).some(t => t.id !== newTask.id && t.projectName === inputProjectName)) {
+      titleSynced = syncProjectTitleAcrossTasks(data, inputProjectName, projectTitle, newTask.id);
+    }
     // 计划外任务 → 生成对应的预期临时事项
     if (isUnplanned) ensureUnplannedExpectedItem(data, newTask);
     // 单次补录：继承「开始时间 → 现在」内、影响所有任务的临时事项
@@ -2093,7 +2113,11 @@ function saveTask(taskId, projectName) {
   }
   saveData(data);
   closeModal();
-  showToast("任务已保存");
+  if (titleSynced > 0) {
+    showToast(`任务已保存，项目名称已同步到该项目另外 ${titleSynced} 个任务`, 'success');
+  } else {
+    showToast("任务已保存");
+  }
   renderTasks();
   renderTempItems();
 }
