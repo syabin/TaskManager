@@ -264,6 +264,19 @@ tr:hover { background: var(--bg-light); }
 .date-cell { white-space: nowrap; text-align: center; }
 
 .impact-chip { display: inline-block; background: var(--bg-primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin: 2px; }
+/* 计划外标签：任务名后 / 临时事项说明后 */
+.unplanned-tag {
+  display: inline-block; background: #fff3cd; color: #856404; border: 1px solid #ffe08a;
+  border-radius: 4px; padding: 0 5px; font-size: 11px; font-weight: 500; margin-left: 6px;
+  vertical-align: middle; white-space: nowrap;
+}
+.unplanned-tag.clickable { cursor: pointer; }
+.unplanned-tag.clickable:hover { background: #ffe9a8; color: #7a5b00; }
+tr.task-row-flash > td { animation: taskRowFlash 1.6s ease; }
+@keyframes taskRowFlash {
+  0%, 60% { background: #fff3cd; }
+  100% { background: transparent; }
+}
 .type-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .tag-temp { background: #e8f0fe; color: #1a73e8; }
 .tag-delivery { background: #e6f4ea; color: #137333; }
@@ -1816,6 +1829,10 @@ function showTaskForm(taskId, projectName, projectTitle) {
       <input type="checkbox" id="mTaskInheritDelay" checked style="cursor:pointer;">
       <label for="mTaskInheritDelay" style="cursor:pointer; color:var(--text-secondary);">继承「开始时间 → 现在」内影响所有任务的临时事项（单次补录）</label>
     </div>` : ''}
+    <div style="background:var(--bg-light); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-top:8px; display:flex; align-items:center; gap:8px; font-size:13px;">
+      <input type="checkbox" id="mTaskUnplanned" ${task && task.unplanned ? 'checked' : ''} style="cursor:pointer;">
+      <label for="mTaskUnplanned" style="cursor:pointer; color:var(--text-secondary);">计划外（勾选后自动生成对应的预期临时事项）</label>
+    </div>
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
       <button class="btn btn-primary" onclick="saveTask('${taskId || ''}', '${projectName ? escAttr(projectName) : ''}')">保存</button>
@@ -1913,6 +1930,62 @@ function projectSuggestKeydown(e) {
   }
 }
 
+// 计划外任务 → 生成 / 更新其对应的「预期临时事项」（status='planned'，实操后再填时长）
+function ensureUnplannedExpectedItem(data, task) {
+  const desc = `【计划外】${task.projectName} ${task.taskName}`;
+  const day = task.startDate ? dOnly(task.startDate) : dOnly(nowLocalDT());
+  // 按关联任务 id 定位（不依赖 unplanned 标记，否则取消勾选后再勾选会重复生成）
+  const exist = (data.tempItems || []).find(it => it.sourceTaskId === task.id);
+  if (exist) {
+    exist.description = desc;
+    exist.date = day;
+    exist.affectedTaskIds = [task.id];
+    exist.unplanned = true;   // 取消过计划外后再勾选，恢复标记
+    return exist;
+  }
+  const item = {
+    id: genId(),
+    date: day,
+    description: desc,
+    durationValue: 0,
+    durationUnit: 'h',
+    impactType: 'specific',
+    affectedTaskIds: [task.id],
+    status: 'planned',        // 预期事件：实操后补时长
+    unplanned: true,           // 计划外标记
+    sourceTaskId: task.id,     // 关联的待办任务（点标签跳转用）
+    createdAt: new Date().toISOString()
+  };
+  (data.tempItems || (data.tempItems = [])).push(item);
+  return item;
+}
+
+// 取消「计划外」：保留临时事项记录，仅摘掉计划外标记（不丢数据）
+function clearUnplannedExpectedItem(data, task) {
+  (data.tempItems || []).forEach(it => {
+    if (it.unplanned && it.sourceTaskId === task.id) it.unplanned = false;
+  });
+}
+
+// 从临时事项的「计划外」标签跳到对应的待办任务
+function jumpToTaskFromTemp(itemId) {
+  const data = loadData();
+  const item = data.tempItems.find(t => t.id === itemId);
+  if (!item) return;
+  const tid = item.sourceTaskId || (item.affectedTaskIds || [])[0];
+  if (!tid) { showToast('该临时事项未关联待办任务'); return; }
+  const task = data.tasks.find(t => t.id === tid);
+  if (!task) { showToast('关联的待办任务已被删除'); return; }
+  switchTab('tasks');
+  setTimeout(function () {
+    const row = document.querySelector('tr[data-task-id="' + tid + '"]');
+    if (!row) { showToast('当前筛选条件下看不到「' + task.taskName + '」'); return; }
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('task-row-flash');
+    setTimeout(() => row.classList.remove('task-row-flash'), 1600);
+  }, 80);
+}
+
 function saveTask(taskId, projectName) {
   const projectNameEl = document.getElementById('mTaskProject');
   const inputProjectName = projectNameEl ? projectNameEl.value.trim() : (projectName || '').trim();
@@ -1922,6 +1995,8 @@ function saveTask(taskId, projectName) {
   const plannedEndDate = document.getElementById('mTaskEnd').value;
   const status = document.getElementById('mTaskStatus').value;
   const inheritDelayEl = document.getElementById('mTaskInheritDelay');
+  const unplannedEl = document.getElementById('mTaskUnplanned');
+  const isUnplanned = !!(unplannedEl && unplannedEl.checked);
 
   if (!inputProjectName || !taskName) { showToast('请填写项目号和任务名称', 'error'); return; }
 
@@ -1936,6 +2011,10 @@ function saveTask(taskId, projectName) {
       task.startDate = startDate;
       task.plannedEndDate = plannedEndDate;
       task.status = status;
+      // 计划外：勾选即生成/更新对应的预期临时事项；取消勾选只摘标记、保留记录
+      task.unplanned = isUnplanned;
+      if (isUnplanned) ensureUnplannedExpectedItem(data, task);
+      else clearUnplannedExpectedItem(data, task);
       if (status !== prevStatus) {
         task.delayRecords.push({
           id: genId(),
@@ -1971,9 +2050,12 @@ function saveTask(taskId, projectName) {
       delayRecords: [],
       pauseRecords: [],
       currentEndDate: plannedEndDate,
-      createdAt: new Date().toISOString() // 汇报里的「新建」记录依据
+      createdAt: new Date().toISOString(), // 汇报里的「新建」记录依据
+      unplanned: isUnplanned
     };
     data.tasks.push(newTask);
+    // 计划外任务 → 生成对应的预期临时事项
+    if (isUnplanned) ensureUnplannedExpectedItem(data, newTask);
     // 单次补录：继承「开始时间 → 现在」内、影响所有任务的临时事项
     if (inheritDelayEl && inheritDelayEl.checked && startDate) {
       const startDT = toDT(startDate);
@@ -2380,10 +2462,10 @@ function renderTasks() {
       // 去空格，适配收窄后的延期列
       const delayLabel = delayCount > 0 ? delayCount + '次延期' : (statusCount > 0 ? statusCount + '次变更' : (pauseCount > 0 ? pauseCount + '次暂停' : ''));
       const hasDelay = t.currentEndDate !== (t.adjustedEndDate || t.plannedEndDate);
-      html += `<tr>
+      html += `<tr data-task-id="${t.id}">
         <td>${t.projectName}</td>
         <td class="project-name-cell" title="${t.projectTitle || ''}">${t.projectTitle || '-'}</td>
-        <td class="task-name-cell" title="${t.taskName}">${t.taskName}</td>
+        <td class="task-name-cell" title="${escAttr(t.taskName)}">${escAttr(t.taskName)}${t.unplanned ? '<span class="unplanned-tag" title="计划外任务：已生成对应的预期临时事项">计划外</span>' : ''}</td>
         <td class="date-cell" title="${formatDate(t.startDate)}">${formatDate(t.startDate)}</td>
         <td class="date-cell" title="${formatDate(t.plannedEndDate)}">${formatDate(t.plannedEndDate)}</td>
         <td class="date-cell" style="${t.adjustedEndDate ? 'color:#f59e0b; font-weight:500;' : ''}" title="${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : ''}">${t.adjustedEndDate ? formatDate(t.adjustedEndDate) : '-'}</td>
@@ -4252,7 +4334,7 @@ function renderDelayItems() {
       <td>${formatDate(item.date)}</td>
       <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
-      <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}</td>
+      <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : ''}</td>
       <td>${delayDisplay}</td>
       <td style="max-width:300px;">${affectedCell}</td>
       <td>${attachCell}</td>
@@ -5022,7 +5104,7 @@ const REPORT_TYPE_MAP = {
   done: ['complete', 'temp'],        // 已完成：任务完成 + 临时事项（已发生的工作）
   created: ['created'],              // 新增：新建任务
   pause: ['pause'],                  // 暂停 / 启动
-  open: ['adjust', 'status', 'delivery'] // 未完成：计划调整、状态变更、交付件更新
+  open: ['adjust', 'status', 'delivery', 'expected'] // 未完成：计划调整、状态变更、交付件更新、预期事项
 };
 const REPORT_TYPE_KEYS = ['done', 'created', 'pause', 'open'];
 
@@ -5089,7 +5171,7 @@ function setReportQuickRange(type) {
 // 预期事件 / 预期交付件（尚未补日期）不入汇报。
 function collectReportEvents(data, start, end) {
   const days = {};
-  const ensure = d => { if (!days[d]) days[d] = { created: [], complete: [], temp: [], delivery: [], adjust: [], status: [], pause: [] }; return days[d]; };
+  const ensure = d => { if (!days[d]) days[d] = { created: [], complete: [], temp: [], expected: [], delivery: [], adjust: [], status: [], pause: [] }; return days[d]; };
   const inRange = d => d && d >= start && d <= end;
   const timeOf = v => (v && v.length >= 16) ? v.slice(11, 16) : '';
 
@@ -5126,7 +5208,12 @@ function collectReportEvents(data, start, end) {
     if (!inRange(day)) return;
     const dur = item.durationUnit === 'd' ? `${item.durationValue || 0} 天` : `${item.durationValue || 0} 小时`;
     const scope = item.impactType === 'all' ? '所有未完成任务' : `${(item.affectedTaskIds || []).length} 个任务`;
-    ensure(day).temp.push({ item, time: timeOf(item.date), dur, scope, sortKey: item.date || item.createdAt || '' });
+    // 预期事项（status='planned'，如计划外任务生成的预期临时事项）属「未完成」，实际发生的事项属「已完成」
+    if (item.status === 'planned') {
+      ensure(day).expected.push({ item, time: timeOf(item.date), dur, scope, sortKey: item.date || item.createdAt || '' });
+    } else {
+      ensure(day).temp.push({ item, time: timeOf(item.date), dur, scope, sortKey: item.date || item.createdAt || '' });
+    }
   });
 
   data.deliveryItems.forEach(item => {
@@ -5142,7 +5229,7 @@ function collectReportEvents(data, start, end) {
 
   // 每天内按时间先后排序
   Object.keys(days).forEach(d => {
-    ['created', 'complete', 'temp', 'delivery', 'adjust', 'status', 'pause'].forEach(k => {
+    ['created', 'complete', 'temp', 'expected', 'delivery', 'adjust', 'status', 'pause'].forEach(k => {
       days[d][k].sort((a, b) => (a.sortKey || '').localeCompare(b.sortKey || ''));
     });
   });
@@ -5160,11 +5247,12 @@ function isoToLocalDT(iso) {
 }
 
 function countReportEvents(days) {
-  const c = { created: 0, complete: 0, temp: 0, delivery: 0, adjust: 0, status: 0, pause: 0 };
+  const c = { created: 0, complete: 0, temp: 0, expected: 0, delivery: 0, adjust: 0, status: 0, pause: 0 };
   Object.values(days).forEach(d => {
     c.created += d.created.length;
     c.complete += d.complete.length;
     c.temp += d.temp.length;
+    c.expected += d.expected.length;
     c.delivery += d.delivery.length;
     c.adjust += d.adjust.length;
     c.status += d.status.length;
@@ -5198,6 +5286,7 @@ function renderReport(byUserAction) {
   if (activeKeys.indexOf('created') !== -1) cards.push(`<div class="stat-card"><div class="stat-value">${counts.created}</div><div class="stat-label">新建任务</div></div>`);
   if (activeKeys.indexOf('open') !== -1) {
     cards.push(`<div class="stat-card"><div class="stat-value">${counts.delivery}</div><div class="stat-label">交付件更新</div></div>`);
+    cards.push(`<div class="stat-card"><div class="stat-value">${counts.expected}</div><div class="stat-label">预期事项</div></div>`);
     cards.push(`<div class="stat-card"><div class="stat-value">${counts.adjust}</div><div class="stat-label">计划调整</div></div>`);
     cards.push(`<div class="stat-card"><div class="stat-value">${counts.status}</div><div class="stat-label">状态变更</div></div>`);
   }
@@ -5225,7 +5314,7 @@ function renderReport(byUserAction) {
     const completedIds = new Set(d.complete.map(e => e.task.id));
     const mergedIds = new Set(d.created.filter(e => completedIds.has(e.task.id)).map(e => e.task.id));
     const dayTotal = d.created.length + d.complete.length - mergedIds.size
-      + d.temp.length + d.delivery.length + d.adjust.length + d.status.length + d.pause.length;
+      + d.temp.length + d.expected.length + d.delivery.length + d.adjust.length + d.status.length + d.pause.length;
     const w = weekNames[new Date(day + 'T00:00:00').getDay()];
     html += `<div class="report-day">
       <div class="report-day-title"><span>${day} 周${w}</span><span class="report-day-count">${dayTotal} 条记录</span></div>
@@ -5247,6 +5336,11 @@ function renderReport(byUserAction) {
       html += itemHtml('<span class="report-item-tag" style="background:#fff3cd;color:#856404;">📝 临时事项</span>',
         escAttr(e.item.description),
         `${e.time || '--:--'} · 时长 ${escAttr(e.dur)} · 影响 ${escAttr(e.scope)}`);
+    });
+    d.expected.forEach(e => {
+      html += itemHtml('<span class="report-item-tag" style="background:#ff8c00;color:#fff;">📌 预期事项</span>',
+        escAttr(e.item.description),
+        `${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : '实操后填写'} · 影响 ${escAttr(e.scope)}`);
     });
     d.delivery.forEach(e => {
       html += itemHtml('<span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>',
@@ -5293,7 +5387,7 @@ function buildReportMarkdown(start, end) {
   const sum = [];
   if (active.indexOf('done') !== -1) sum.push(`- 完成任务：${counts.complete} 项`, `- 临时事项：${counts.temp} 项`);
   if (active.indexOf('created') !== -1) sum.push(`- 新建任务：${counts.created} 项`);
-  if (active.indexOf('open') !== -1) sum.push(`- 交付件更新：${counts.delivery} 项`, `- 计划调整：${counts.adjust} 次`, `- 状态变更：${counts.status} 次`);
+  if (active.indexOf('open') !== -1) sum.push(`- 交付件更新：${counts.delivery} 项`, `- 预期事项：${counts.expected} 项`, `- 计划调整：${counts.adjust} 次`, `- 状态变更：${counts.status} 次`);
   if (active.indexOf('pause') !== -1) sum.push(`- 暂停 / 启动：${counts.pause} 次`);
   md += sum.join('\n') + '\n\n';
   const sortedDays = Object.keys(days).sort((a, b) => b.localeCompare(a));
@@ -5314,6 +5408,7 @@ function buildReportMarkdown(start, end) {
       md += `- ✅ 完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}${e.time ? '（' + e.time + '）' : ''}${e.reason ? ' — ' + mdSafe(e.reason) : ''}\n`;
     });
     d.temp.forEach(e => { md += `- 📝 临时事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 时长 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
+    d.expected.forEach(e => { md += `- 📌 预期事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : '实操后填写'} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.delivery.forEach(e => { md += `- 📦 交付件更新 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 处理 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.adjust.forEach(e => { md += `- 🔧 计划调整 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
     d.status.forEach(e => { md += `- 🔄 状态变更 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · ${mdSafe(e.from)} → ${mdSafe(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
