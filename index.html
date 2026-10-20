@@ -5711,6 +5711,56 @@ async function ghRepairAllArchiveDirs() {
   showToast(`修复完成：改名 ${ok} 个${copied ? `，复制 ${copied} 个` : ''}${fail ? `，失败 ${fail} 个` : ''}`);
 }
 
+// 清理「远端有、本地已不存在」的附件（本地删除后仓库里的旧文件不会自动删，需显式确认）
+async function ghPruneOrphanAttachments(silentIfNone) {
+  const cfg = ghConfig();
+  if (!cfg.syncAttachments) { showToast('未勾选「同时同步附件」，无需清理'); return; }
+  if (!hasArchivePath()) { showToast('未设置存档目录，无法比对本地附件'); return; }
+
+  setGhBusy(true);
+  setGhStatus('正在检查远端多余附件…');
+  try {
+    const remoteMap = await ghListRemoteAttachments(cfg);
+    if (!remoteMap) { showToast('附件目录过大或无法完整读取，已中止清理'); setGhStatus('附件清单不完整，未执行清理'); return; }
+    const data = loadData();
+    const localPaths = {};
+    (data.tempItems || []).forEach(item => {
+      (item.attachments || []).forEach(a => { localPaths[ghAttachmentPath(cfg, item.id, a.name, 'temp')] = true; });
+    });
+    (data.deliveryItems || []).forEach(item => {
+      (item.attachments || []).forEach(a => { localPaths[ghAttachmentPath(cfg, item.id, a.name, 'delivery')] = true; });
+    });
+    const orphans = Object.keys(remoteMap).filter(p => !localPaths[p]);
+    if (!orphans.length) {
+      if (!silentIfNone) showToast('远端没有多余附件，无需清理');
+      setGhStatus('远端没有多余附件');
+      return;
+    }
+    const preview = orphans.slice(0, 8).map(p => '· ' + p.replace(cfg.attPath + '/', '')).join('\n');
+    if (!confirm(
+      `远端有 ${orphans.length} 个本地已不存在的附件（多为本地删除文件后遗留）：\n\n${preview}${orphans.length > 8 ? '\n…' : ''}\n\n` +
+      '确定从 GitHub 仓库删除它们吗？删除后无法通过本工具恢复。'
+    )) { setGhStatus('已取消清理'); return; }
+
+    setGhStatus(`正在删除 ${orphans.length} 个远端附件…`);
+    let ok = 0, fail = 0;
+    for (const p of orphans) {
+      try {
+        await ghApi('DELETE', ghPathUrl(cfg, p, '?sha=' + encodeURIComponent(remoteMap[p]) +
+          '&message=' + encodeURIComponent('chore: 清理本地已删除的附件 ' + new Date().toLocaleString('zh-CN'))));
+        ok++;
+      } catch (e) { console.warn('删除失败:', p, e); fail++; }
+    }
+    showToast(fail ? `已清理 ${ok} 个，失败 ${fail} 个（可在 GitHub 手动处理）` : `已清理 ${ok} 个远端多余附件`, fail ? 'error' : 'success');
+    setGhStatus(fail
+      ? `附件清理：成功 ${ok} 个，失败 ${fail} 个`
+      : `附件清理：已删除 ${ok} 个远端多余附件`);
+    updateGhStatus();
+  } catch (e) {
+    handleGhError(e);
+  } finally { setGhBusy(false); }
+}
+
 // ====== 云端差异对比 ======
 const GH_TASK_FIELDS = [
   ['projectName', '项目号'], ['projectTitle', '项目名称'], ['taskName', '任务名称'],
@@ -5815,6 +5865,7 @@ async function ghShowDiff() {
   }
   body += `<div style="text-align:right;margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
     <button class="btn btn-outline" onclick="closeModal()">关闭</button>
+    <button class="btn btn-outline" onclick="closeModal(); ghPruneOrphanAttachments()">🧹 清理远端多余附件</button>
     <button class="btn btn-outline" onclick="closeModal(); ghPull()">⬇ 采纳云端（拉取覆盖本地）</button>
     <button class="btn btn-danger" onclick="closeModal(); ghForceUpload()">⚠ 强制覆盖上传</button>
   </div>`;
@@ -6379,7 +6430,7 @@ async function ghUpload(opts) {
     if (remote) body.sha = remote.sha; // 更新已有文件必须带当前 sha
     const res = await ghApi('PUT', ghFileUrl(cfg), body);
     const newSha = (res.content && res.content.sha) || remote.sha;
-    let attNote = '', attDetails = '';
+    let attNote = '', attDetails = '', orphanCount = 0;
     if (cfg.syncAttachments) {
       const att = await ghUploadAttachments(cfg, loadData());
       if (att.noHandle) {
@@ -6394,11 +6445,15 @@ async function ghUpload(opts) {
         if (att.orphan > 0) {
           attNote += `（远端另有 ${att.orphan} 个本地已不存在的附件，未自动删除）`;
           attDetails = (attDetails ? attDetails + '\n' : '') + `远端多出 ${att.orphan} 个附件（本地已删除，仓库里仍保留）`;
+          orphanCount = att.orphan; // 上传完成后在状态栏给出清理入口
         }
       }
     }
     ghSetSync({ sha: newSha, syncedAt: new Date().toISOString(), localHash: ghLocalFingerprint(), att: attNote, attDetails: attDetails });
-    setGhStatus('<span style="color:#198754;">' + (force ? '强制覆盖成功' : '上传成功') + '，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>');
+    setGhStatus('<span style="color:#198754;">' + (force ? '强制覆盖成功' : '上传成功') + '，远端 sha <code>' + escAttr((newSha || '').slice(0, 7)) + '</code> · ' + escAttr(attNote || '数据已同步') + '</span>' +
+      (orphanCount > 0
+        ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;padding:2px 10px;font-size:12px;" onclick="ghPruneOrphanAttachments()" title="删除远端有、本地已不存在的附件">🧹 清理 ${orphanCount} 个远端多余附件</button>`
+        : ''));
     if (silent) {
       return { ok: true, sha: newSha, att: attNote };
     }
