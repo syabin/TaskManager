@@ -299,6 +299,14 @@ tr.task-row-flash > td { animation: taskRowFlash 1.6s ease; }
 .stats-grid-compact .stat-card { background: transparent; box-shadow: none; padding: 0; text-align: right; display: flex; align-items: baseline; gap: 4px; }
 .stats-grid-compact .stat-value { font-size: 16px; line-height: 1; }
 .stats-grid-compact .stat-label { font-size: 11px; margin-top: 0; }
+/* 汇报弹窗：筛选放大、统计缩小 */
+#reportTypeFilters { gap: 22px; font-size: 15px !important; }
+#reportTypeFilters label { padding: 4px 2px; }
+#reportTypeFilters input[type=checkbox] { width: 17px; height: 17px; cursor: pointer; }
+.report-stats { gap: 8px; margin-bottom: 14px; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.report-stats .stat-card { padding: 6px 8px; border-radius: 6px; }
+.report-stats .stat-value { font-size: 17px; line-height: 1.1; }
+.report-stats .stat-label { font-size: 11px; margin-top: 2px; }
 
 .task-select-list { max-height: 300px; overflow-y: auto; }
 .task-select-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
@@ -5291,7 +5299,7 @@ function renderReport(byUserAction) {
     cards.push(`<div class="stat-card"><div class="stat-value">${counts.status}</div><div class="stat-label">状态变更</div></div>`);
   }
   if (activeKeys.indexOf('pause') !== -1) cards.push(`<div class="stat-card"><div class="stat-value">${counts.pause}</div><div class="stat-label">暂停 / 启动</div></div>`);
-  let html = `<div class="stats-grid" style="margin-bottom:16px;">${cards.join('')}</div>`;
+  let html = `<div class="stats-grid report-stats">${cards.join('')}</div>`;
 
   if (total === 0) {
     html += '<div class="empty-state"><p>该时间段内没有可汇报的记录</p></div>';
