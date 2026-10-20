@@ -275,8 +275,10 @@ tr:hover { background: var(--bg-light); }
 /* 曾为「计划外」、后来取消勾选 → 改为灰色的「计划已调整」 */
 .unplanned-tag.adjusted { background: #e9ecef; color: #495057; border-color: #ced4da; }
 .unplanned-tag.adjusted:hover { background: #dee2e6; color: #343a40; }
-/* 说明列：文字独立限宽并省略号截断，后面的「计划外 / 计划已调整」标签始终跟在文字末尾，不会被挤到下一行压住文字 */
-.delay-desc { display: inline-block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+/* 说明列：文字占剩余宽度并省略号截断；「计划外 / 计划已调整」标签固定贴在列的最右侧 */
+.delay-cell-wrap { display: flex; align-items: center; gap: 6px; }
+.delay-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delay-tag-slot { flex-shrink: 0; margin-left: auto; }
 tr.task-row-flash > td { animation: taskRowFlash 1.6s ease; }
 @keyframes taskRowFlash {
   0%, 60% { background: #fff3cd; }
@@ -4274,7 +4276,7 @@ function renderDelayItems() {
     info.textContent = `第 ${currentPage} / ${totalPages} 页，共 ${combined.length} 条`;
   }
 
-  let html = '<table><thead><tr><th>类型</th><th>日期</th><th>记录ID</th><th>时长/处理</th><th>说明</th><th style="width:130px;">导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
+  let html = '<table><thead><tr><th>类型</th><th>日期</th><th>记录ID</th><th>时长/处理</th><th style="min-width:440px;">说明</th><th style="width:130px;">导致延期</th><th>影响任务</th><th>附件</th><th>操作</th></tr></thead><tbody>';
   pageItems.forEach(item => {
     const isDelivery = item._src === 'delivery';
     const plannedItem = item.status === 'planned';
@@ -4360,7 +4362,7 @@ function renderDelayItems() {
       <td>${formatDate(item.date)}</td>
       <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
-      <td title="${escAttr(item.description || '')}" style="max-width:340px;"><span class="delay-desc">${escAttr(item.description || '')}</span>${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : (item.unplannedAdjusted ? `<span class="unplanned-tag adjusted clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="曾标记为计划外，现已取消勾选；点击仍可跳转到对应任务">计划已调整</span>` : '')}</td>
+      <td title="${escAttr(item.description || '')}" style="max-width:560px;"><div class="delay-cell-wrap"><span class="delay-desc">${escAttr(item.description || '')}</span><span class="delay-tag-slot">${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : (item.unplannedAdjusted ? `<span class="unplanned-tag adjusted clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="曾标记为计划外，现已取消勾选；点击仍可跳转到对应任务">计划已调整</span>` : '')}</span></div></td>
       <td>${delayDisplay}</td>
       <td style="max-width:300px;">${affectedCell}</td>
       <td>${attachCell}</td>
