@@ -272,6 +272,9 @@ tr:hover { background: var(--bg-light); }
 }
 .unplanned-tag.clickable { cursor: pointer; }
 .unplanned-tag.clickable:hover { background: #ffe9a8; color: #7a5b00; }
+/* 曾为「计划外」、后来取消勾选 → 改为灰色的「计划已调整」 */
+.unplanned-tag.adjusted { background: #e9ecef; color: #495057; border-color: #ced4da; }
+.unplanned-tag.adjusted:hover { background: #dee2e6; color: #343a40; }
 tr.task-row-flash > td { animation: taskRowFlash 1.6s ease; }
 @keyframes taskRowFlash {
   0%, 60% { background: #fff3cd; }
@@ -899,6 +902,12 @@ function copyTempItemId(id) {
 // Display a stored date (YYYY-MM-DD or YYYY-MM-DDTHH:mm) as "YYYY-MM-DD HH:mm"
 function formatDate(d) {
   if (!d) return '-';
+  // UTC ISO 时间（以 Z 结尾，如 syncedAt）→ 按浏览器所在时区转换再显示，
+  // 否则会显示 UTC 时间（东八区会少 8 小时）
+  if (typeof d === 'string' && /Z$/.test(d)) {
+    const local = isoToLocalDT(d);
+    if (local) return local.replace('T', ' ');
+  }
   if (typeof d === 'string' && d.includes('T')) {
     const parts = d.split('T');
     const t = (parts[1] || '').slice(0, 5);
@@ -1950,7 +1959,8 @@ function ensureUnplannedExpectedItem(data, task) {
     exist.description = desc;
     exist.date = day;
     exist.affectedTaskIds = [task.id];
-    exist.unplanned = true;   // 取消过计划外后再勾选，恢复标记
+    exist.unplanned = true;         // 取消过计划外后再勾选，恢复标记
+    exist.unplannedAdjusted = false; // 「计划已调整」状态作废
     return exist;
   }
   const item = {
@@ -1970,10 +1980,13 @@ function ensureUnplannedExpectedItem(data, task) {
   return item;
 }
 
-// 取消「计划外」：保留临时事项记录，仅摘掉计划外标记（不丢数据）
+// 取消「计划外」：保留临时事项记录，标签改为「计划已调整」（不丢数据）
 function clearUnplannedExpectedItem(data, task) {
   (data.tempItems || []).forEach(it => {
-    if (it.unplanned && it.sourceTaskId === task.id) it.unplanned = false;
+    if (it.sourceTaskId === task.id) {
+      it.unplanned = false;
+      it.unplannedAdjusted = true;
+    }
   });
 }
 
@@ -4344,7 +4357,7 @@ function renderDelayItems() {
       <td>${formatDate(item.date)}</td>
       <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
-      <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : ''}</td>
+      <td title="${item.description}">${(item.description || '').length > 30 ? item.description.substring(0, 30) + '...' : (item.description || '')}${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : (item.unplannedAdjusted ? `<span class="unplanned-tag adjusted clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="曾标记为计划外，现已取消勾选；点击仍可跳转到对应任务">计划已调整</span>` : '')}</td>
       <td>${delayDisplay}</td>
       <td style="max-width:300px;">${affectedCell}</td>
       <td>${attachCell}</td>
@@ -5350,7 +5363,7 @@ function renderReport(byUserAction) {
     d.expected.forEach(e => {
       html += itemHtml('<span class="report-item-tag" style="background:#ff8c00;color:#fff;">📌 预期事项</span>',
         escAttr(e.item.description),
-        `${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : '实操后填写'} · 影响 ${escAttr(e.scope)}`);
+        `${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : (e.item.unplannedAdjusted ? '计划已调整' : '实操后填写')} · 影响 ${escAttr(e.scope)}`);
     });
     d.delivery.forEach(e => {
       html += itemHtml('<span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>',
@@ -5418,7 +5431,7 @@ function buildReportMarkdown(start, end) {
       md += `- ✅ 完成 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}${e.time ? '（' + e.time + '）' : ''}${e.reason ? ' — ' + mdSafe(e.reason) : ''}\n`;
     });
     d.temp.forEach(e => { md += `- 📝 临时事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 时长 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
-    d.expected.forEach(e => { md += `- 📌 预期事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : '实操后填写'} · 影响 ${mdSafe(e.scope)}）\n`; });
+    d.expected.forEach(e => { md += `- 📌 预期事项 ${mdSafe(e.item.description)}（${e.time || '--:--'} · ${e.item.unplanned ? '计划外' : (e.item.unplannedAdjusted ? '计划已调整' : '实操后填写')} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.delivery.forEach(e => { md += `- 📦 交付件更新 ${mdSafe(e.item.description)}（${e.time || '--:--'} · 处理 ${mdSafe(e.dur)} · 影响 ${mdSafe(e.scope)}）\n`; });
     d.adjust.forEach(e => { md += `- 🔧 计划调整 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · 调整为 ${formatDate(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
     d.status.forEach(e => { md += `- 🔄 状态变更 [${mdSafe(e.task.projectName)}] ${mdSafe(e.task.taskName)}（${e.time || '--:--'} · ${mdSafe(e.from)} → ${mdSafe(e.to)}${e.reason ? ' · ' + mdSafe(e.reason) : ''}）\n`; });
