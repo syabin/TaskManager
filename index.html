@@ -1951,8 +1951,8 @@ function projectSuggestKeydown(e) {
 
 // 计划外任务 → 生成 / 更新其对应的「预期临时事项」（status='planned'，实操后再填时长）
 function ensureUnplannedExpectedItem(data, task) {
-  // 描述格式：[计划外] 项目号 项目名称-任务名称（项目名称为空时省略该段）
-  const desc = `[计划外] ${task.projectName} ${task.projectTitle ? task.projectTitle + '-' : ''}${task.taskName}`;
+  // 描述格式：[计划外] 项目号 项目名称 任务名称（各段一律用空格分隔，项目名称为空时省略该段）
+  const desc = `[计划外] ${task.projectName} ${task.projectTitle ? task.projectTitle + ' ' : ''}${task.taskName}`;
   const day = task.startDate ? dOnly(task.startDate) : dOnly(nowLocalDT());
   // 按关联任务 id 定位（不依赖 unplanned 标记，否则取消勾选后再勾选会重复生成）
   const exist = (data.tempItems || []).find(it => it.sourceTaskId === task.id);
