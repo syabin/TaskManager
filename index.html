@@ -1857,7 +1857,7 @@ function showTaskForm(taskId, projectName, projectTitle) {
     </div>
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveTask('${taskId || ''}', '${projectName ? escAttr(projectName) : ''}')">保存</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveTask('${taskId || ''}', '${projectName ? escAttr(projectName) : ''}')">保存</button>
     </div>
   `;
   openModal(html);
@@ -2163,7 +2163,7 @@ function completeTask(id) {
     </div>
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveCompletion('${id}')">确认完成</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveCompletion('${id}')">确认完成</button>
     </div>`;
   openModal(html);
 }
@@ -2230,7 +2230,7 @@ function pauseTask(taskId) {
     <p style="font-size:12px; color:#856404; background:var(--warning-bg); border-radius:6px; padding:8px 10px;">暂停期间：不受「影响所有任务」的临时事项 / 交付件更新影响，不记录延期；启动后恢复顺延。</p>
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="savePauseRecord('${taskId}')">确认暂停</button>
+      <button class="btn btn-primary" data-enter-submit onclick="savePauseRecord('${taskId}')">确认暂停</button>
     </div>
   `);
 }
@@ -2294,7 +2294,7 @@ function resumeTask(taskId) {
     </div>`}
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveResumeRecord('${taskId}')">确认启动</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveResumeRecord('${taskId}')">确认启动</button>
     </div>
   `);
 }
@@ -2351,7 +2351,7 @@ function editPauseRecord(taskId, recordId) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" onclick="savePauseRecordEdit('${taskId}','${recordId}')">保存</button>
+      <button class="btn btn-primary" data-enter-submit onclick="savePauseRecordEdit('${taskId}','${recordId}')">保存</button>
     </div>
   `);
 }
@@ -2833,7 +2833,7 @@ function showTempForm(tempId, forcePlanned) {
     ${uploadSection}
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeTempForm()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" onclick="saveTempItem('${tempId || ''}')">保存并应用延期</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveTempItem('${tempId || ''}')">保存并应用延期</button>
     </div>
   `;
   openModal(html);
@@ -3396,7 +3396,7 @@ function showAdjustForm(taskId, recordId) {
       ${deleteBtn}
       <div style="margin-left:auto;">
         <button class="btn btn-outline" onclick="closeModal()" style="margin-right:8px;">取消</button>
-        <button class="btn btn-primary" onclick="${btnOnclick}">${btnText}</button>
+        <button class="btn btn-primary" data-enter-submit onclick="${btnOnclick}">${btnText}</button>
       </div>
     </div>`;
   openModal(html);
@@ -3453,7 +3453,7 @@ function editStatusRecord(taskId, recordId) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" onclick="saveStatusRecord('${taskId}','${recordId}')">保存</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveStatusRecord('${taskId}','${recordId}')">保存</button>
     </div>
   `);
 }
@@ -3493,7 +3493,7 @@ function editCompleteRecord(taskId, recordId) {
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" onclick="saveCompleteRecord('${taskId}','${recordId}')">保存</button>
+      <button class="btn btn-primary" data-enter-submit onclick="saveCompleteRecord('${taskId}','${recordId}')">保存</button>
     </div>
   `);
 }
@@ -3787,7 +3787,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
     ${uploadSection}
     <div style="text-align:right; margin-top:16px;">
       <button class="btn btn-outline" onclick="closeDeliveryForm()" style="margin-right:8px;">取消</button>
-      <button class="btn btn-primary" id="btnSaveDelivery" onclick="saveDeliveryItem('${deliveryId || ''}')">保存并应用延期</button>
+      <button class="btn btn-primary" data-enter-submit id="btnSaveDelivery" onclick="saveDeliveryItem('${deliveryId || ''}')">保存并应用延期</button>
     </div>
   `;
   openModal(html);
@@ -5897,6 +5897,30 @@ async function ghForceUpload() {
 }
 // 勾选「编辑后自动静默上传」后：每次 saveData（所有编辑的统一入口）后延迟 3 秒静默上传，
 // 连续编辑会合并成一次；不弹窗、不打扰，结果只在顶栏显示一行状态。
+// ====== 回车快速提交 ======
+// 模态框内按 Enter 即触发主操作（保存 / 确认完成 / 确认调整…），无需再点一次按钮
+// 规则：① 有 data-enter-submit 标记的按钮优先；② 否则若框内只有一个 .btn-primary 则触发它；
+//       ③ textarea / 可编辑区域 / 按住 Shift、Ctrl、Alt 时不触发（多行输入需要正常换行）
+function initEnterToSubmit() {
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    const t = e.target;
+    if (t) {
+      const tag = (t.tagName || '').toUpperCase();
+      if (tag === 'TEXTAREA' || t.isContentEditable) return;
+      // 焦点在按钮上时交给浏览器原生行为（回车 = 点击该按钮，如「取消」不会被误当保存）
+      if (tag === 'BUTTON' || tag === 'A') return;
+    }
+    const overlay = document.getElementById('modalOverlay');
+    if (!overlay || !overlay.classList.contains('active')) return;
+    const scope = overlay.querySelector('.modal') || overlay;
+    const marked = scope.querySelector('[data-enter-submit]:not([disabled])');
+    if (marked) { e.preventDefault(); marked.click(); return; }
+    const primaries = scope.querySelectorAll('.btn-primary:not([disabled])');
+    if (primaries.length === 1) { e.preventDefault(); primaries[0].click(); }
+  });
+}
+
 // ====== GitHub 自动静默同步 ======
 var _ghAutoTimer = null;
 var _ghAutoBusy = false;
@@ -7032,6 +7056,8 @@ async function init() {
   await loadHolidaysFromAPI();
   // 恢复存档路径
   initArchivePath();
+  // 回车快速提交（保存 / 确认 / 确认调整…）
+  try { initEnterToSubmit(); } catch (e) {}
 }
 init();
 </script>
