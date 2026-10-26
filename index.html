@@ -2167,6 +2167,8 @@ function completeTask(id) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === id);
   if (!task) return;
+  // 计划外任务：关联的「预期临时事项」在完成时一并转为已发生（补填实操时长）
+  const plannedItem = (data.tempItems || []).find(it => it.sourceTaskId === id && it.status === 'planned');
   const html = `
     <div class="modal-header">
       <h3>标记完成 - ${task.taskName}</h3>
@@ -2179,6 +2181,30 @@ function completeTask(id) {
         <span style="font-size:11px;color:var(--text-muted);">可补录非当天的完成时间</span>
       </div>
     </div>
+    ${plannedItem ? `
+    <div style="background:#fff9e6;border:1px solid #ffe08a;border-radius:6px;padding:10px 12px;">
+      <div style="font-size:13px;margin-bottom:8px;">
+        <b>计划外任务</b>：关联一条预期临时事项，完成时建议同步补填它的实操数据
+        <div style="margin-top:4px;color:var(--text-secondary);">${escAttr(plannedItem.description || '')}</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+        <input type="checkbox" id="mCompleteUpdateItem" checked onchange="toggleCompleteItemFields()"> 同时把预期临时事项转为「已发生」（会按实际时长顺延任务完成时间）
+      </label>
+      <div id="mCompleteItemFields" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="form-group" style="margin:0;">
+          <label style="font-size:12px;">实际时长</label>
+          <input type="number" id="mCompleteItemDuration" min="0" step="0.5" placeholder="如 4" style="width:96px;">
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label style="font-size:12px;">单位</label>
+          <select id="mCompleteItemUnit" style="width:84px;"><option value="h">小时</option><option value="d">天</option></select>
+        </div>
+        <div class="form-group" style="margin:0;flex:1;min-width:190px;">
+          <label style="font-size:12px;">实操说明（可选）</label>
+          <input type="text" id="mCompleteItemNote" placeholder="如：厂家配合增加 2 次现场确认">
+        </div>
+      </div>
+    </div>` : ''}
     <div class="form-row">
       <div class="form-group">
         <label>备注</label>
@@ -2192,12 +2218,64 @@ function completeTask(id) {
   openModal(html);
 }
 
+function toggleCompleteItemFields() {
+  const cb = document.getElementById('mCompleteUpdateItem');
+  const box = document.getElementById('mCompleteItemFields');
+  if (cb && box) box.style.display = cb.checked ? 'flex' : 'none';
+}
+
+// 计划外任务完成时：把关联的预期临时事项转为已发生，并按实际时长顺延任务
+// 必须在标记任务「已完成」之前调用 —— 任务未完成时才会顺延，且顺延记录要落在完成时间之前
+function applyUnplannedItemAsDone(data, task, opts) {
+  const item = (data.tempItems || []).find(it => it.sourceTaskId === task.id && it.status === 'planned');
+  if (!item) return null;
+  const when = opts.completedAt || nowLocalDT();
+  const day = dOnly(when);
+  const delayHours = opts.durationUnit === 'd' ? opts.durationValue * 8 : opts.durationValue;
+
+  item.status = 'done';                 // 预期 → 已发生
+  item.date = day;
+  item.durationValue = opts.durationValue;
+  item.durationUnit = opts.durationUnit;
+  if (opts.note) item.description = (item.description || '') + '｜' + opts.note;
+
+  if (delayHours > 0 && isDelayAffectable(task)) {
+    task.delayRecords.push({
+      id: genId(),
+      date: when,
+      delayHours,
+      newEndDate: '',
+      causedByTempItemId: item.id,
+      reason: opts.note || item.description || '计划外任务实操',
+      createdAt: new Date().toISOString()
+    });
+  }
+  return item;
+}
+
 function saveCompletion(id) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === id);
   if (!task) return;
   const completedAt = document.getElementById('mCompleteAt').value || nowLocalDT();
   const reason = document.getElementById('mCompleteReason').value.trim();
+
+  // 计划外任务：先把关联的预期临时事项转为已发生并顺延，再标记任务完成
+  // （顺序要紧：任务未完成时才会顺延；顺延记录落在完成时间上，不会被完成冻结）
+  const updCb = document.getElementById('mCompleteUpdateItem');
+  let itemUpdated = null;
+  if (updCb && updCb.checked) {
+    const durEl = document.getElementById('mCompleteItemDuration');
+    const unitEl = document.getElementById('mCompleteItemUnit');
+    const noteEl = document.getElementById('mCompleteItemNote');
+    const durationValue = durEl ? (parseFloat(durEl.value) || 0) : 0;
+    const durationUnit = unitEl ? unitEl.value : 'h';
+    const note = noteEl ? noteEl.value.trim() : '';
+    if (durationValue > 0) {
+      itemUpdated = applyUnplannedItemAsDone(data, task, { completedAt, durationValue, durationUnit, note });
+    }
+  }
+
   task.status = '已完成';
   task.completedAt = completedAt;
   task.delayRecords.push({
@@ -2221,8 +2299,9 @@ function saveCompletion(id) {
   } else {
     closeModal();
   }
-  showToast('任务已标记为完成');
+  showToast(itemUpdated ? '任务已标记为完成，关联的预期临时事项已转为已发生' : '任务已标记为完成');
   renderTasks();
+  renderTempItems();
 }
 
 // ====== 暂停 / 启动 ======
