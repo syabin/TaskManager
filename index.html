@@ -1813,7 +1813,10 @@ function showTaskForm(taskId, projectName, projectTitle) {
   const html = `
     <div class="modal-header">
       <h3>${title}</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
+      <div style="display:flex; align-items:center; gap:8px;">
+        ${task ? `<button class="btn btn-outline btn-sm" onclick="copyTaskAsCsv('${task.id}')" title="把该任务复制为 CSV（可直接粘贴到 Excel，或回贴到「批量导入」的粘贴框）">复制 CSV</button>` : ''}
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2011,6 +2014,27 @@ function jumpToTaskFromTemp(itemId) {
     row.classList.add('task-row-flash');
     setTimeout(() => row.classList.remove('task-row-flash'), 1600);
   }, 80);
+}
+
+// 把任务复制为 CSV（字段顺序与「批量导入」一致：项目号,项目名称,任务名称,开始时间,计划完成时间,状态）
+function copyTaskAsCsv(taskId) {
+  const data = loadData();
+  const t = data.tasks.find(x => x.id === taskId);
+  if (!t) { showToast('任务不存在', 'error'); return; }
+  // 含逗号/引号/换行的值需要加引号并转义
+  const cell = v => {
+    const s = String(v == null ? '' : v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const header = '项目号,项目名称,任务名称,开始时间,计划完成时间,状态';
+  const row = [t.projectName, t.projectTitle || '', t.taskName, t.startDate || '', t.plannedEndDate || '', t.status].map(cell).join(',');
+  const csv = header + '\n' + row;
+  const done = () => showToast('任务已复制为 CSV，可直接粘贴到 Excel');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(csv).then(done, () => fallbackCopyText(csv, done));
+  } else {
+    fallbackCopyText(csv, done);
+  }
 }
 
 // 项目名称按「项目号」共享：与该项目下其他任务保持一致，返回被同步的任务数
