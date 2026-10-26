@@ -2184,25 +2184,12 @@ function completeTask(id) {
     ${plannedItem ? `
     <div style="background:#fff9e6;border:1px solid #ffe08a;border-radius:6px;padding:10px 12px;">
       <div style="font-size:13px;margin-bottom:8px;">
-        <b>计划外任务</b>：关联一条预期临时事项，完成时建议同步补填它的实操数据
+        <b>计划外任务</b>：关联一条预期临时事项，可先补填它的实操数据（沿用临时事项的编辑窗口）
         <div style="margin-top:4px;color:var(--text-secondary);">${escAttr(plannedItem.description || '')}</div>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-        <input type="checkbox" id="mCompleteUpdateItem" checked onchange="toggleCompleteItemFields()"> 同时把预期临时事项转为「已发生」（会按实际时长顺延任务完成时间）
-      </label>
-      <div id="mCompleteItemFields" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:flex-end;">
-        <div class="form-group" style="margin:0;">
-          <label style="font-size:12px;">实际时长</label>
-          <input type="number" id="mCompleteItemDuration" min="0" step="0.5" placeholder="如 4" style="width:96px;">
-        </div>
-        <div class="form-group" style="margin:0;">
-          <label style="font-size:12px;">单位</label>
-          <select id="mCompleteItemUnit" style="width:84px;"><option value="h">小时</option><option value="d">天</option></select>
-        </div>
-        <div class="form-group" style="margin:0;flex:1;min-width:190px;">
-          <label style="font-size:12px;">实操说明（可选）</label>
-          <input type="text" id="mCompleteItemNote" placeholder="如：厂家配合增加 2 次现场确认">
-        </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" onclick="openUnplannedItemEditor('${id}')" title="打开临时事项的编辑窗口，补填日期、时长、说明等实操数据">📝 补填临时事项实操数据</button>
+        <span style="font-size:12px;color:var(--text-muted);">补填并保存后，该事项自动转为「已发生」，并按实际时长顺延任务完成时间</span>
       </div>
     </div>` : ''}
     <div class="form-row">
@@ -2218,39 +2205,15 @@ function completeTask(id) {
   openModal(html);
 }
 
-function toggleCompleteItemFields() {
-  const cb = document.getElementById('mCompleteUpdateItem');
-  const box = document.getElementById('mCompleteItemFields');
-  if (cb && box) box.style.display = cb.checked ? 'flex' : 'none';
-}
-
-// 计划外任务完成时：把关联的预期临时事项转为已发生，并按实际时长顺延任务
-// 必须在标记任务「已完成」之前调用 —— 任务未完成时才会顺延，且顺延记录要落在完成时间之前
-function applyUnplannedItemAsDone(data, task, opts) {
-  const item = (data.tempItems || []).find(it => it.sourceTaskId === task.id && it.status === 'planned');
-  if (!item) return null;
-  const when = opts.completedAt || nowLocalDT();
-  const day = dOnly(when);
-  const delayHours = opts.durationUnit === 'd' ? opts.durationValue * 8 : opts.durationValue;
-
-  item.status = 'done';                 // 预期 → 已发生
-  item.date = day;
-  item.durationValue = opts.durationValue;
-  item.durationUnit = opts.durationUnit;
-  if (opts.note) item.description = (item.description || '') + '｜' + opts.note;
-
-  if (delayHours > 0 && isDelayAffectable(task)) {
-    task.delayRecords.push({
-      id: genId(),
-      date: when,
-      delayHours,
-      newEndDate: '',
-      causedByTempItemId: item.id,
-      reason: opts.note || item.description || '计划外任务实操',
-      createdAt: new Date().toISOString()
-    });
-  }
-  return item;
+// 跳到临时事项的编辑窗口（完全沿用其表单）补填计划外事项的实操数据；
+// 保存后由 saveTempItem 自动转正并应用延期，再回到完成弹窗
+function openUnplannedItemEditor(taskId) {
+  const data = loadData();
+  const item = (data.tempItems || []).find(it => it.sourceTaskId === taskId && it.status === 'planned');
+  if (!item) { showToast('未找到该任务关联的预期临时事项', 'error'); return; }
+  _pendingCompleteTaskId = taskId;
+  closeModal();
+  showTempForm(item.id);
 }
 
 function saveCompletion(id) {
@@ -2260,21 +2223,9 @@ function saveCompletion(id) {
   const completedAt = document.getElementById('mCompleteAt').value || nowLocalDT();
   const reason = document.getElementById('mCompleteReason').value.trim();
 
-  // 计划外任务：先把关联的预期临时事项转为已发生并顺延，再标记任务完成
-  // （顺序要紧：任务未完成时才会顺延；顺延记录落在完成时间上，不会被完成冻结）
-  const updCb = document.getElementById('mCompleteUpdateItem');
-  let itemUpdated = null;
-  if (updCb && updCb.checked) {
-    const durEl = document.getElementById('mCompleteItemDuration');
-    const unitEl = document.getElementById('mCompleteItemUnit');
-    const noteEl = document.getElementById('mCompleteItemNote');
-    const durationValue = durEl ? (parseFloat(durEl.value) || 0) : 0;
-    const durationUnit = unitEl ? unitEl.value : 'h';
-    const note = noteEl ? noteEl.value.trim() : '';
-    if (durationValue > 0) {
-      itemUpdated = applyUnplannedItemAsDone(data, task, { completedAt, durationValue, durationUnit, note });
-    }
-  }
+  // 计划外任务：若已通过临时事项编辑窗口补填过实操数据，那条预期事项已被转正、
+  // 延期也已应用到本任务（由 saveTempItem 完成），此处只需标记任务完成。
+  // 顺延记录时间与完成时间相同，不会被「完成即冻结」误清。
 
   task.status = '已完成';
   task.completedAt = completedAt;
@@ -2299,13 +2250,12 @@ function saveCompletion(id) {
   } else {
     closeModal();
   }
-  showToast(itemUpdated ? '任务已标记为完成，关联的预期临时事项已转为已发生' : '任务已标记为完成');
+  showToast('任务已标记为完成');
   renderTasks();
   renderTempItems();
 }
 
-// ====== 暂停 / 启动 ======
-// 暂停期间：不被「影响所有任务」波及、不记录延期；暂停与启动时间可编辑、可删除（防误操作）
+// ====== 暂停 / 启动 ======// 暂停期间：不被「影响所有任务」波及、不记录延期；暂停与启动时间可编辑、可删除（防误操作）
 function pauseTask(taskId) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === taskId);
@@ -2841,6 +2791,8 @@ function editTempItemFromDelay(tempItemId, taskId) {
 
 // Track pending files for temp item form
 var _pendingFiles = [];
+// 从「标记完成」跳去补填计划外临时事项时记录来源任务，保存后自动回到完成弹窗
+var _pendingCompleteTaskId = null;
 
 // ====== Temp Item Management ======
 function showTempForm(tempId, forcePlanned) {
@@ -3367,6 +3319,12 @@ try {
     var reopenTaskId = _pendingDelayModalTaskId;
     _pendingDelayModalTaskId = null;
     setTimeout(function() { showTaskDelays(reopenTaskId); }, 100);
+  }
+  // 从「标记完成」跳去补填计划外临时事项的：保存后回到完成弹窗
+  if (_pendingCompleteTaskId) {
+    var backTaskId = _pendingCompleteTaskId;
+    _pendingCompleteTaskId = null;
+    setTimeout(function() { completeTask(backTaskId); }, 100);
   }
 } catch(e) { console.error('saveTempItem error:', e); }
 }
