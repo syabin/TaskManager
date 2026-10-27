@@ -4017,6 +4017,13 @@ function jumpToPage(inputId, totalPages, onPageChange) {
   if (typeof fn === 'function') fn(p);
 }
 
+// 交付件的「统计日期」：有开始处理日期时以它为准（列表显示、排序、汇报归日统一用这个口径）
+// 注意：仅用于展示与统计，存储字段 item.date / deliveryDate 保持不变（附件目录名与阻塞基准依赖它）
+function getDeliveryStatDate(item) {
+  if (!item) return '';
+  return item.processStartDate || item.deliveryDate || item.date || '';
+}
+
 function renderDeliveryPagination(total, pageSize, currentPage, onPageChange) {
   return buildPaginationHtml(total, pageSize, currentPage, onPageChange, 'pgJumpDelivery');
 }
@@ -4777,7 +4784,7 @@ function renderDelayItems() {
 
     html += `<tr>
       <td><span class="type-tag ${typeClass}">${typeLabel}</span></td>
-      <td>${formatDate(item.date)}</td>
+      <td>${formatDate(isDelivery ? getDeliveryStatDate(item) : item.date)}</td>
       <td><code style="font-size:11px; background:var(--bg-light); padding:1px 4px; border-radius:3px; cursor:pointer;" title="${dispId}" onclick="${copyFn}">${dispIdShort}</code></td>
       <td>${durationDisplay}</td>
       <td title="${escAttr(item.description || '')}" style="max-width:560px;"><span class="delay-desc">${escAttr(item.description || '')}</span>${item.unplanned ? `<span class="unplanned-tag clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="点击跳转到对应的待办任务">计划外</span>` : (item.unplannedAdjusted ? `<span class="unplanned-tag adjusted clickable" onclick="jumpToTaskFromTemp('${item.id}')" title="曾标记为计划外，现已取消勾选；点击仍可跳转到对应任务">计划已调整</span>` : '')}</td>
@@ -5025,7 +5032,7 @@ function renderReview() {
       return cb.localeCompare(ca);
     });
     deliveryItems.sort((a, b) => {
-      const d = b.date.localeCompare(a.date);
+      const d = getDeliveryStatDate(b).localeCompare(getDeliveryStatDate(a));
       if (d !== 0) return d;
       const ca = a.createdAt || '';
       const cb = b.createdAt || '';
@@ -5665,7 +5672,7 @@ function collectReportEvents(data, start, end) {
   });
 
   data.deliveryItems.forEach(item => {
-    const dDate = item.deliveryDate || item.date;
+    const dDate = getDeliveryStatDate(item);
     const day = dOnly(dDate);
     if (!inRange(day)) return;
     const dur = item.processUnit === 'd' ? `${item.processValue || 0} 天` : `${item.processValue || 0} 小时`;
