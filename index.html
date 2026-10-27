@@ -408,6 +408,9 @@ tr.task-row-flash > td { animation: taskRowFlash 1.6s ease; }
 .paste-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: center; }
 .file-chip-remove { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1; }
 .file-chip-remove:hover { color: var(--danger-dark); }
+/* 附件上的「智能识别」按钮 */
+.file-chip-ocr { background: none; border: none; cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1; opacity: .75; }
+.file-chip-ocr:hover { opacity: 1; transform: scale(1.15); }
 
 /* Attachment display in detail */
 .attachment-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -2815,6 +2818,7 @@ function showTempForm(tempId, forcePlanned) {
       return `<div class="file-chip">
         <span class="file-chip-name" title="${a.name}">📎 ${a.name}</span>
         <span class="file-chip-size">${formatFileSize(a.size)}</span>
+        <button class="file-chip-ocr" onclick="ocrExistingAttachment('${tempId}','${a.name.replace(/'/g, "\\'")}')" title="智能识别会议主题 / 日期 / 时长">🤖</button>
         <button class="file-chip-remove" onclick="removeExistingAttachment('${tempId}','${a.name.replace(/'/g, "\\'")}')" title="删除附件">×</button>
       </div>`;
     }).join('');
@@ -2976,9 +2980,158 @@ function renderPendingFiles() {
     return '<div class="file-chip">' +
       '<span class="file-chip-name" title="' + f.name + '">📎 ' + f.name + '</span>' +
       '<span class="file-chip-size">' + formatFileSize(f.size) + '</span>' +
+      '<button class="file-chip-ocr" onclick="ocrPendingFile(' + idx + ')" title="智能识别会议主题 / 日期 / 时长">🤖</button>' +
       '<button class="file-chip-remove" onclick="removePendingFile(' + idx + ')" title="移除">×</button>' +
       '</div>';
   }).join('');
+}
+
+// ====== 会议邀请智能识别（OCR） ======
+// 附件（会议邀请截图）→ 识别文字 → 解析主题 / 日期 / 时长 → 回填表单
+// OCR 引擎按需从 CDN 加载，不影响离线使用（仅点击识别时需要联网）
+
+var _tesseractPromise = null;
+function loadTesseractEngine() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (_tesseractPromise) return _tesseractPromise;
+  _tesseractPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = function () { resolve(window.Tesseract); };
+    s.onerror = function () { reject(new Error('OCR 引擎加载失败，请检查网络后重试')); };
+    document.head.appendChild(s);
+  });
+  return _tesseractPromise;
+}
+
+async function ocrImageToText(file) {
+  var T = await loadTesseractEngine();
+  var worker = await T.createWorker('chi_sim');
+  try {
+    var res = await worker.recognize(file);
+    return (res && res.data && res.data.text) || '';
+  } finally {
+    try { await worker.terminate(); } catch (e) {}
+  }
+}
+
+// 解析会议邀请文本 → 主题 / 日期 / 开始 / 结束 / 时长（小时）
+function parseMeetingInviteText(raw) {
+  var text = String(raw || '').replace(/\r/g, '');
+  var lines = text.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
+  var res = { topic: '', date: '', start: '', end: '', durationHours: 0, organizer: '', room: '' };
+
+  // 「10月27日 周二 11:00 - 12:00」这类日期时间行
+  var dtRe = /(\d{1,2})\s*月\s*(\d{1,2})\s*日[^\n]{0,14}?(\d{1,2})\s*[:：]\s*(\d{2})\s*[-–—~～至到]\s*(\d{1,2})\s*[:：]\s*(\d{2})/;
+  var m = text.match(dtRe);
+  if (m) {
+    var mo = +m[1], dd = +m[2], sh = +m[3], sm = +m[4], eh = +m[5], em = +m[6];
+    var now = new Date();
+    var dt = new Date(now.getFullYear(), mo - 1, dd, sh, sm);
+    // 只识别到月日：若算出的日期已过去很久，按跨年会议处理
+    if (dt.getTime() < now.getTime() - 180 * 86400000) dt = new Date(now.getFullYear() + 1, mo - 1, dd, sh, sm);
+    res.date = fmtDateLocal(dt);
+    var pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    res.start = pad2(sh) + ':' + pad2(sm);
+    res.end = pad2(eh) + ':' + pad2(em);
+    var mins = (eh * 60 + em) - (sh * 60 + sm);
+    if (mins < 0) mins += 24 * 60;          // 跨天会议
+    res.durationHours = Math.round(mins / 60 * 100) / 100;
+  }
+
+  // 发起人 / 会议室
+  var orgM = text.match(/发起人[：:\s]*([^\n]{0,20})/);
+  if (orgM) res.organizer = orgM[1].replace(/\s+/g, ' ').trim();
+  var roomM = text.match(/会议室[：:\s]*([^\n]{0,40})/);
+  if (roomM) res.room = roomM[1].replace(/\s+/g, ' ').trim();
+
+  // 主题：日期时间行之前、最靠前且像标题的一行
+  var dtLineIdx = -1;
+  for (var i = 0; i < lines.length; i++) {
+    if (/\d{1,2}\s*月\s*\d{1,2}\s*日/.test(lines[i]) || /\d{1,2}\s*[:：]\s*\d{2}\s*[-–—~～至到]\s*\d{1,2}\s*[:：]\s*\d{2}/.test(lines[i])) { dtLineIdx = i; break; }
+  }
+  var limit = dtLineIdx === -1 ? lines.length : dtLineIdx;
+  for (var j = 0; j < limit; j++) {
+    var l = lines[j];
+    if (!l || l.length < 3) continue;
+    // 「会议主题：xxx」这类带前缀的行：剥掉前缀当主题
+    var tm = l.match(/^(?:会议主题|会议邀请|会议|主题)\s*[：:]\s*(.+)$/);
+    if (tm) { res.topic = tm[1].trim(); break; }
+    if (/^(发起人|参会人|会议室|复制链接|进入会议|转发|添加同事)/.test(l)) continue;
+    if (/^\d{1,2}[:：]\d{2}/.test(l)) continue;
+    res.topic = l;
+    break;
+  }
+  if (!res.topic && lines.length) res.topic = lines[0];
+  return res;
+}
+
+// 把识别结果回填到临时事项表单
+function applyMeetingInviteToForm(info) {
+  var filled = [];
+  var descEl = document.getElementById('mTempDesc');
+  if (descEl && info.topic) { descEl.value = info.topic; filled.push('主题'); }
+  var dateEl = document.getElementById('mTempDate');
+  if (dateEl && info.date) {
+    var v = info.date + (info.start ? 'T' + info.start : 'T00:00');
+    dateEl.value = v;
+    filled.push('日期');
+  }
+  var durEl = document.getElementById('mTempDuration');
+  var unitEl = document.getElementById('mTempDurationUnit');
+  if (durEl && unitEl && info.durationHours > 0) {
+    durEl.value = info.durationHours;
+    unitEl.value = 'h';
+    filled.push('时长');
+  }
+  return filled;
+}
+
+// 识别待保存的附件
+async function ocrPendingFile(idx) {
+  var f = _pendingFiles[idx];
+  if (!f) return;
+  await runMeetingOcr(f, '正在识别附件…（首次使用需下载中文语言包，请稍候）');
+}
+
+// 识别已保存的附件（从本地存档读回文件）
+async function ocrExistingAttachment(tempId, filename) {
+  var data = loadData();
+  var item = data.tempItems.find(function (t) { return t.id === tempId; });
+  if (!item) return;
+  if (!_archiveHandle) { showToast('未设置附件存档路径，无法读取附件', 'error'); return; }
+  try {
+    var dir = await resolveArchiveDir(item, false);
+    if (!dir) { showToast('找不到附件所在目录，可能已移动存档路径', 'error'); return; }
+    var fh = await dir.handle.getFileHandle(filename);
+    var file = await fh.getFile();
+    await runMeetingOcr(file, '正在识别附件…（首次使用需下载中文语言包，请稍候）');
+  } catch (e) {
+    showToast('读取附件失败：' + (e && e.message ? e.message : '未知错误'), 'error');
+  }
+}
+
+async function runMeetingOcr(file, loadingMsg) {
+  showToast(loadingMsg);
+  var text = '';
+  try {
+    text = await ocrImageToText(file);
+  } catch (e) {
+    showToast('识别失败：' + (e && e.message ? e.message : '未知错误'), 'error');
+    return;
+  }
+  var info = parseMeetingInviteText(text);
+  var filled = applyMeetingInviteToForm(info);
+  if (!filled.length) {
+    showToast('未识别出会议信息，可手动填写（识别到的文字见控制台）', 'error');
+    console.log('OCR 原始文本：\n' + text);
+    return;
+  }
+  var extra = [];
+  if (info.organizer) extra.push('发起人 ' + info.organizer);
+  if (info.room) extra.push(info.room);
+  showToast('已识别并填入：' + filled.join('、') + (extra.length ? '（' + extra.join(' · ') + '）' : ''), 'success');
+  console.log('OCR 原始文本：\n' + text);
 }
 
 function removeExistingAttachment(tempId, filename) {
