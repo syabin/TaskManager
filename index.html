@@ -3015,9 +3015,27 @@ async function ocrImageToText(file) {
   }
 }
 
+// OCR 归一化：中文逐字识别会在汉字之间插入空格（"现场 料 堵 粉" → "现场料堵粉"）
+// 规则：① 汉字之间的空格/制表符一律去掉（循环到收敛）；② 汉字与中文标点之间的空白去掉；
+//       ③ 其余连续空白压缩为一个（英文单词、数字之间的正常空格保留）
+// 注意：这里只用空格与制表符，不能用 \s —— \s 会吃掉换行，导致整篇文字粘成一行
+function normalizeOcrText(raw) {
+  var s = String(raw || '').replace(/\r/g, '');
+  var prev;
+  do {
+    prev = s;
+    s = s.replace(/([一-龥])[ \t]+([一-龥])/g, '$1$2');
+  } while (s !== prev);
+  s = s.replace(/([一-龥])[ \t]+([，。；：、！？）】》」』])/g, '$1$2');
+  s = s.replace(/([（【《「『])[ \t]+([一-龥])/g, '$1$2');
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  s = s.split('\n').map(function (l) { return l.trim(); }).join('\n');
+  return s;
+}
+
 // 解析会议邀请文本 → 主题 / 日期 / 开始 / 结束 / 时长（小时）
 function parseMeetingInviteText(raw) {
-  var text = String(raw || '').replace(/\r/g, '');
+  var text = normalizeOcrText(raw);
   var lines = text.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
   var res = { topic: '', date: '', start: '', end: '', durationHours: 0, organizer: '', room: '' };
 
