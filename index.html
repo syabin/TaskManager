@@ -4467,8 +4467,8 @@ function showDeliveryItemDetail(deliveryId) {
   const processDisplay = item.processUnit === 'd' ? `${item.processValue} 天` : `${item.processValue} 小时`;
   const processHours = item.processUnit === 'd' ? item.processValue * 8 : item.processValue;
   const processWorkdays = hoursToWorkingDaysOffset(processHours);
-    const blockDelayDisplay = `从 ${formatDate(item.date)} 延 ${processWorkdays} 工作日`;
-    const processDelayDisplay = `从 ${formatDate(item.processStartDate || item.date)} 延 ${processWorkdays} 工作日`;
+    const blockDelayDisplay = `从 ${formatDate(getDeliveryStatDate(item))} 延 ${processWorkdays} 工作日`;
+    const processDelayDisplay = `从 ${formatDate(getDeliveryStatDate(item))} 延 ${processWorkdays} 工作日`;
 
   const blockScopeText = item.blockImpactType === 'all' ? '所有未完成任务' : (item.blockImpactType === 'specific' ? '指定任务' : '无');
   const processScopeText = item.processImpactType === 'all' ? '所有未完成任务' : (item.processImpactType === 'specific' ? '指定任务' : '无');
@@ -4749,11 +4749,11 @@ function renderDelayItems() {
       const hasBlock = item.blockImpactType !== 'none' && (item.blockAffectedTaskIds || []).length > 0;
       const hasProcess = item.processImpactType !== 'none' && (item.processAffectedTaskIds || []).length > 0;
       if (hasBlock && hasProcess) {
-        delayDisplay = `阻塞: ${formatDate(item.date)}+${processWorkdays}天 / 占用: ${formatDate(item.processStartDate || item.date)}+${processWorkdays}天`;
+        delayDisplay = `阻塞: ${formatDate(getDeliveryStatDate(item))}+${processWorkdays}天 / 占用: ${formatDate(getDeliveryStatDate(item))}+${processWorkdays}天`;
       } else if (hasBlock) {
-        delayDisplay = `从 ${formatDate(item.date)} 延 ${processWorkdays} 工作日`;
+        delayDisplay = `从 ${formatDate(getDeliveryStatDate(item))} 延 ${processWorkdays} 工作日`;
       } else if (hasProcess) {
-        delayDisplay = `从 ${formatDate(item.processStartDate || item.date)} 延 ${processWorkdays} 工作日`;
+        delayDisplay = `从 ${formatDate(getDeliveryStatDate(item))} 延 ${processWorkdays} 工作日`;
       } else {
         delayDisplay = `${processWorkdays} 工作日`;
       }
