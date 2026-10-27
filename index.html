@@ -1391,16 +1391,28 @@ function addWorkingDays(dateStr, workDays) {
 }
 
 // ====== Tab Switching ======
+const TAB_KEY = 'tm-active-tab';
+const TAB_NAMES = ['tasks', 'delays', 'heatmap', 'review', 'data'];
 function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn')[['tasks','delays','heatmap','review','data'].indexOf(name)].classList.add('active');
+  document.querySelectorAll('.tab-btn')[TAB_NAMES.indexOf(name)].classList.add('active');
+  // 记住当前标签页，刷新后回到同一页
+  try { localStorage.setItem(TAB_KEY, name); } catch (e) {}
   if (name === 'tasks') renderTasks();
   if (name === 'delays') renderDelayItems();
   if (name === 'heatmap') renderHeatmap();
   if (name === 'review') renderReview();
   if (name === 'data') { updateDataStatus(); ghLoadConfig(); }
+}
+
+// 刷新后恢复上次所在的标签页
+function restoreActiveTab() {
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    if (saved && TAB_NAMES.indexOf(saved) !== -1 && saved !== 'tasks') switchTab(saved);
+  } catch (e) {}
 }
 
 // ====== Modal ======
@@ -2796,15 +2808,13 @@ var _pendingFiles = [];
 var _pendingCompleteTaskId = null;
 
 // 切换「预期事件」：勾选 = 尚未实操（不产生延期，实操后补填时间与时长）
+// 注意：日期与时长栏始终保留，勾选/取消时已填的值不会丢失
 function toggleTempExpectedState() {
   var cb = document.getElementById('mTempIsExpected');
   var st = document.getElementById('mTempStatus');
-  var box = document.getElementById('mTempTimeFields');
   var titleEl = document.getElementById('mTempFormTitle');
   var isExp = !!(cb && cb.checked);
   if (st) st.value = isExp ? 'planned' : 'done';
-  // 新建且为预期事件时隐藏日期与时长栏；编辑时始终保留（补填实操数据要用）
-  if (box) box.style.display = (isExp && !_tempFormIsEdit) ? 'none' : 'flex';
   if (titleEl) titleEl.textContent = (_tempFormIsEdit ? '编辑' : '新建') + (isExp ? '预期事件' : '临时事项');
 }
 
@@ -2868,7 +2878,7 @@ function showTempForm(tempId, forcePlanned) {
     ${isExpected
       ? '<input type="hidden" id="mTempStatus" value="planned">'
       : '<input type="hidden" id="mTempStatus" value="done">'}
-    <div class="form-row" id="mTempTimeFields" style="display:${(!isExpected || item) ? 'flex' : 'none'};">
+    <div class="form-row" id="mTempTimeFields" style="display:flex;">
       <div class="form-group">
         <label>事项日期</label>
         <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
@@ -3974,14 +3984,41 @@ function onDeliveryPageSizeChange() {
   renderDeliveryItems();
 }
 
-function renderDeliveryPagination(total, pageSize, currentPage, onPageChange) {
+// ====== 分页组件（统一增强版：首页 / 上一页 / 页码信息 / 下一页 / 末页 / 跳转指定页） ======
+// onPageChange 传函数名字符串（如 'changeDelayPage'），跳转时按名调用
+function buildPaginationHtml(total, pageSize, currentPage, onPageChange, inputId) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   if (currentPage > totalPages) currentPage = totalPages;
   if (currentPage < 1) currentPage = 1;
-  let html = `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>`;
+  const btn = (label, page, disabled, title) =>
+    `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${page})" ${disabled ? 'disabled' : ''} title="${title || label}">${label}</button>`;
+  let html = btn('首页', 1, currentPage === 1, '跳到第 1 页');
+  html += btn('上一页', currentPage - 1, currentPage === 1, '上一页');
   html += `<span style="font-size:13px; color:var(--text-secondary); padding:0 8px;">第 ${currentPage} / ${totalPages} 页，共 ${total} 条</span>`;
-  html += `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>`;
+  html += btn('下一页', currentPage + 1, currentPage === totalPages, '下一页');
+  html += btn('末页', totalPages, currentPage === totalPages, '跳到最后一页');
+  html += `<span style="font-size:13px; color:var(--text-secondary); padding-left:10px;">跳至</span>`;
+  html += `<input type="number" id="${inputId}" min="1" max="${totalPages}" placeholder="${currentPage}" style="width:62px;padding:2px 6px;font-size:12px;" onkeydown="if(event.key==='Enter'){jumpToPage('${inputId}',${totalPages},'${onPageChange}')}">`;
+  html += `<span style="font-size:13px; color:var(--text-secondary);">页</span>`;
+  html += `<button class="btn btn-sm btn-outline" onclick="jumpToPage('${inputId}',${totalPages},'${onPageChange}')">跳转</button>`;
   return html;
+}
+
+// 跳转到指定页（回车或点「跳转」按钮）
+function jumpToPage(inputId, totalPages, onPageChange) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  let p = parseInt(el.value, 10);
+  if (!p || isNaN(p)) p = 1;
+  if (p < 1) p = 1;
+  if (p > totalPages) p = totalPages;
+  el.value = '';
+  const fn = window[onPageChange];
+  if (typeof fn === 'function') fn(p);
+}
+
+function renderDeliveryPagination(total, pageSize, currentPage, onPageChange) {
+  return buildPaginationHtml(total, pageSize, currentPage, onPageChange, 'pgJumpDelivery');
 }
 
 function changeDeliveryPage(page) {
@@ -4015,11 +4052,9 @@ var _deliveryFormIsEdit = false;
 function toggleDeliveryExpectedState() {
   var cb = document.getElementById('mDeliveryIsExpected');
   var st = document.getElementById('mDeliveryStatus');
-  var box = document.getElementById('mDeliveryTimeFields');
   var titleEl = document.getElementById('mDeliveryFormTitle');
   var isExp = !!(cb && cb.checked);
   if (st) st.value = isExp ? 'planned' : 'done';
-  if (box) box.style.display = (isExp && !_deliveryFormIsEdit) ? 'none' : 'flex';
   if (titleEl) titleEl.textContent = (_deliveryFormIsEdit ? '编辑' : '新建') + (isExp ? '预期交付件' : '交付件更新');
 }
 
@@ -4083,7 +4118,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
     ${isExpected
       ? '<input type="hidden" id="mDeliveryStatus" value="planned">'
       : '<input type="hidden" id="mDeliveryStatus" value="done">'}
-    <div class="form-row" id="mDeliveryTimeFields" style="display:${(!isExpected || item) ? 'flex' : 'none'};">
+    <div class="form-row" id="mDeliveryTimeFields" style="display:flex;">
       <div class="form-group">
         <label>交付件更新日期</label>
         <input type="datetime-local" id="mDeliveryDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
@@ -4527,13 +4562,7 @@ function onTempPageSizeChange() {
 }
 
 function renderTempPagination(total, pageSize, currentPage, onPageChange) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  if (currentPage > totalPages) currentPage = totalPages;
-  if (currentPage < 1) currentPage = 1;
-  let html = `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>`;
-  html += `<span style="font-size:13px; color:var(--text-secondary); padding:0 8px;">第 ${currentPage} / ${totalPages} 页，共 ${total} 条</span>`;
-  html += `<button class="btn btn-sm btn-outline" onclick="${onPageChange}(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>`;
-  return html;
+  return buildPaginationHtml(total, pageSize, currentPage, onPageChange, 'pgJumpTemp');
 }
 
 function changeTempPage(page) {
@@ -4560,10 +4589,17 @@ function setDelayPageSize(size) {
   localStorage.setItem(DELAY_PAGE_SIZE_KEY, String(size));
 }
 function getDelayCurrentPage() {
-  return _delayCurrentPage || 1;
+  if (_delayCurrentPage) return _delayCurrentPage;
+  // 刷新后回到上次所在页
+  try {
+    const v = parseInt(localStorage.getItem(DELAY_PAGE_KEY) || '', 10);
+    if (v > 0) { _delayCurrentPage = v; return v; }
+  } catch (e) {}
+  return 1;
 }
 function setDelayCurrentPage(page) {
   _delayCurrentPage = page;
+  try { localStorage.setItem(DELAY_PAGE_KEY, String(page)); } catch (e) {}
 }
 function onDelayPageSizeChange() {
   const size = parseInt(document.getElementById('delayPageSize').value, 10);
@@ -7403,6 +7439,8 @@ async function init() {
 
   updateDataStatus();
   renderTasks();
+  // 刷新后回到上次所在的标签页
+  try { restoreActiveTab(); } catch (e) {}
   // 恢复 GitHub 自动同步的顶栏状态（若已开启）
   try { ghLoadConfig(); } catch (e) {}
   // 初始化左侧项目导航（状态恢复 + 拖拽绑定 + 顶部定位）
