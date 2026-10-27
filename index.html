@@ -550,8 +550,6 @@ try {
         </select>
       </div>
       <div style="display:flex; gap:8px; margin-left:auto;">
-        <button class="btn btn-primary" onclick="showTempForm(null, true)" style="background:#e8590c; border-color:#e8590c;">+ 新建预期事件</button>
-        <button class="btn btn-primary" onclick="showDeliveryForm(null, true)" style="background:#e8590c; border-color:#e8590c;">+ 新建预期交付件</button>
         <button class="btn btn-primary" onclick="showTempForm()">+ 新建临时事项</button>
         <button class="btn btn-primary" onclick="showDeliveryForm()">+ 新建交付件更新</button>
       </div>
@@ -2797,11 +2795,26 @@ var _pendingFiles = [];
 // 从「标记完成」跳去补填计划外临时事项时记录来源任务，保存后自动回到完成弹窗
 var _pendingCompleteTaskId = null;
 
+// 切换「预期事件」：勾选 = 尚未实操（不产生延期，实操后补填时间与时长）
+function toggleTempExpectedState() {
+  var cb = document.getElementById('mTempIsExpected');
+  var st = document.getElementById('mTempStatus');
+  var box = document.getElementById('mTempTimeFields');
+  var titleEl = document.getElementById('mTempFormTitle');
+  var isExp = !!(cb && cb.checked);
+  if (st) st.value = isExp ? 'planned' : 'done';
+  // 新建且为预期事件时隐藏日期与时长栏；编辑时始终保留（补填实操数据要用）
+  if (box) box.style.display = (isExp && !_tempFormIsEdit) ? 'none' : 'flex';
+  if (titleEl) titleEl.textContent = (_tempFormIsEdit ? '编辑' : '新建') + (isExp ? '预期事件' : '临时事项');
+}
+
 // ====== Temp Item Management ======
+var _tempFormIsEdit = false;
 function showTempForm(tempId, forcePlanned) {
   const data = loadData();
   const item = tempId ? data.tempItems.find(t => t.id === tempId) : null;
   const isExpected = !!forcePlanned || !!(item && item.status === 'planned');
+  _tempFormIsEdit = !!item;
   const title = item ? (isExpected ? '编辑预期事件' : '编辑临时事项') : (isExpected ? '新建预期事件' : '新建临时事项');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
@@ -2843,14 +2856,19 @@ function showTempForm(tempId, forcePlanned) {
 
   const html = `
     <div class="modal-header">
-      <h3>${title}</h3>
-      <button class="modal-close" onclick="closeTempForm()">&times;</button>
+      <h3 id="mTempFormTitle">${title}</h3>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <label title="勾选表示这是「预期事件」——实操后再补填日期与时长，期间不产生延期" style="display:flex; align-items:center; gap:5px; font-size:13px; cursor:pointer; color:var(--text-secondary);">
+          <input type="checkbox" id="mTempIsExpected" ${isExpected ? 'checked' : ''} onchange="toggleTempExpectedState()" style="cursor:pointer;">
+          预期事件
+        </label>
+        <button class="modal-close" onclick="closeTempForm()">&times;</button>
+      </div>
     </div>
     ${isExpected
       ? '<input type="hidden" id="mTempStatus" value="planned">'
       : '<input type="hidden" id="mTempStatus" value="done">'}
-    ${(!isExpected || item) ? `
-    <div class="form-row">
+    <div class="form-row" id="mTempTimeFields" style="display:${(!isExpected || item) ? 'flex' : 'none'};">
       <div class="form-group">
         <label>事项日期</label>
         <input type="datetime-local" id="mTempDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
@@ -2865,7 +2883,7 @@ function showTempForm(tempId, forcePlanned) {
           </select>
         </div>
       </div>
-    </div>` : ''}
+    </div>
     <div class="form-row">
       <div class="form-group">
         <label>事项描述</label>
@@ -4019,10 +4037,24 @@ function editDeliveryItemFromDelay(deliveryItemId, taskId) {
   showDeliveryForm(deliveryItemId);
 }
 
+// 切换「预期交付件」：勾选 = 尚未实操（不产生延期，实操后补填处理时长）
+var _deliveryFormIsEdit = false;
+function toggleDeliveryExpectedState() {
+  var cb = document.getElementById('mDeliveryIsExpected');
+  var st = document.getElementById('mDeliveryStatus');
+  var box = document.getElementById('mDeliveryTimeFields');
+  var titleEl = document.getElementById('mDeliveryFormTitle');
+  var isExp = !!(cb && cb.checked);
+  if (st) st.value = isExp ? 'planned' : 'done';
+  if (box) box.style.display = (isExp && !_deliveryFormIsEdit) ? 'none' : 'flex';
+  if (titleEl) titleEl.textContent = (_deliveryFormIsEdit ? '编辑' : '新建') + (isExp ? '预期交付件' : '交付件更新');
+}
+
 function showDeliveryForm(deliveryId, forcePlanned) {
   const data = loadData();
   const item = deliveryId ? data.deliveryItems.find(t => t.id === deliveryId) : null;
   const isExpected = !!forcePlanned || !!(item && item.status === 'planned');
+  _deliveryFormIsEdit = !!item;
   const title = item ? (isExpected ? '编辑预期交付件' : '编辑交付件更新') : (isExpected ? '新建预期交付件' : '新建交付件更新');
   const incompleteTasks = data.tasks.filter(t => t.status !== '已完成');
 
@@ -4066,14 +4098,19 @@ function showDeliveryForm(deliveryId, forcePlanned) {
 
   const html = `
     <div class="modal-header">
-      <h3>${title}</h3>
-      <button class="modal-close" onclick="closeDeliveryForm()">&times;</button>
+      <h3 id="mDeliveryFormTitle">${title}</h3>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <label title="勾选表示这是「预期交付件」——实操后再补填处理时长，期间不产生延期" style="display:flex; align-items:center; gap:5px; font-size:13px; cursor:pointer; color:var(--text-secondary);">
+          <input type="checkbox" id="mDeliveryIsExpected" ${isExpected ? 'checked' : ''} onchange="toggleDeliveryExpectedState()" style="cursor:pointer;">
+          预期交付件
+        </label>
+        <button class="modal-close" onclick="closeDeliveryForm()">&times;</button>
+      </div>
     </div>
     ${isExpected
       ? '<input type="hidden" id="mDeliveryStatus" value="planned">'
       : '<input type="hidden" id="mDeliveryStatus" value="done">'}
-    ${(!isExpected || item) ? `
-    <div class="form-row">
+    <div class="form-row" id="mDeliveryTimeFields" style="display:${(!isExpected || item) ? 'flex' : 'none'};">
       <div class="form-group">
         <label>交付件更新日期</label>
         <input type="datetime-local" id="mDeliveryDate" value="${item && item.date ? toDT(item.date) : (isExpected ? '' : nowLocalDT())}">
@@ -4092,7 +4129,7 @@ function showDeliveryForm(deliveryId, forcePlanned) {
           </select>
         </div>
       </div>
-    </div>` : ''}
+    </div>
     <div class="form-row">
       <div class="form-group">
         <label>交付件说明</label>
