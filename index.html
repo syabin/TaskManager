@@ -4683,8 +4683,10 @@ function renderDelayItems() {
   const isPlannedItem = x => x.status === 'planned';
   const plannedItems = combined.filter(isPlannedItem).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   const normalItems = combined.filter(x => !isPlannedItem(x));
+  // 排序键：交付件用统计日期（有开始处理日期时以它为准），其余用原日期
+  const statSortDate = x => (x._src === 'delivery' ? getDeliveryStatDate(x) : (x.date || ''));
   normalItems.sort((a, b) => {
-    const dc = b.date.localeCompare(a.date);
+    const dc = statSortDate(b).localeCompare(statSortDate(a));
     if (dc !== 0) return dc;
     const ca = a.createdAt || '';
     const cb = b.createdAt || '';
