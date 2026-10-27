@@ -2872,6 +2872,14 @@ function showTempForm(tempId, forcePlanned) {
         <textarea id="mTempDesc" rows="2" placeholder="临时事项内容">${item ? item.description : ''}</textarea>
       </div>
     </div>
+    <div id="ocrRawBox" style="display:none;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <label style="font-size:12px;color:var(--text-secondary);margin:0;">识别到的原文（识别不准时可复制这段反馈）</label>
+        <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="copyOcrRaw()">复制原文</button>
+        <button class="btn btn-outline btn-sm" style="padding:1px 8px;font-size:11px;" onclick="document.getElementById('ocrRawBox').style.display='none'">收起</button>
+      </div>
+      <textarea id="ocrRawText" rows="4" readonly style="font-size:12px;font-family:monospace;background:var(--bg-light);"></textarea>
+    </div>
     <div class="form-row">
       <div class="form-group">
         <label>影响范围</label>
@@ -3033,6 +3041,31 @@ function normalizeOcrText(raw) {
   return s;
 }
 
+// 从文本中扫描所有"看起来像时间"的片段 → [{h, m, i}]
+// 比单条正则鲁棒：不管 OCR 把冒号写成什么、几行几段，都能捞出时间点
+function extractTimePoints(text) {
+  var res = [];
+  var push = function (h, m, i) {
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) res.push({ h: h, m: m, i: i });
+  };
+  var re1 = /(\d{1,2})\s*[:：.、;；·]\s*(\d{2})/g;                   // 14:00 / 14：00 / 14.00
+  var m;
+  while ((m = re1.exec(text)) !== null) push(+m[1], +m[2], m.index);
+  var re2 = /(\d{1,2})\s*[点時时]\s*(\d{1,2})?/g;                      // 9点30 / 9时
+  while ((m = re2.exec(text)) !== null) push(+m[1], m[2] ? +m[2] : 0, m.index);
+  var re3 = /(\d{2})(\d{2})/g;                                        // 紧凑写法 1400
+  while ((m = re3.exec(text)) !== null) {
+    // 前后不能紧邻数字或冒号（否则是别的数字的一部分）
+    var before = m.index > 0 ? text.charAt(m.index - 1) : '';
+    var afterIdx = m.index + m[0].length;
+    var after = afterIdx < text.length ? text.charAt(afterIdx) : '';
+    if (/[\d:：.、;；·]/.test(before) || /[\d:：.、;；·]/.test(after)) continue;
+    push(+m[1], +m[2], m.index);
+  }
+  res.sort(function (a, b) { return a.i - b.i; });
+  return res;
+}
+
 // 解析会议邀请文本 → 主题 / 日期 / 开始 / 结束 / 时长（小时）
 function parseMeetingInviteText(raw) {
   var text = normalizeOcrText(raw);
@@ -3062,10 +3095,18 @@ function parseMeetingInviteText(raw) {
   } else if (cm) {
     sh = +cm[1]; sm = cm[2] ? +cm[2] : 0; eh = +cm[3]; em = cm[4] ? +cm[4] : 0;
   } else {
-    var sm2 = text.match(singleRe);
-    if (sm2) { sh = +sm2[1]; sm = +sm2[2]; }
-    var cm2 = text.match(cnRe);
-    if (sh === null && cm2) { sh = +cm2[1]; sm = cm2[2] ? +cm2[2] : 0; }
+    // 多点扫描：同一行内的两个时间点视为区间，否则取最早的一个
+    var pts = extractTimePoints(text);
+    if (pts.length) {
+      var firstLine = -1;
+      for (var li = 0; li < lines.length; li++) { if (extractTimePoints(lines[li]).length) { firstLine = li; break; } }
+      var sameLine = firstLine >= 0 ? extractTimePoints(lines[firstLine]) : [];
+      if (sameLine.length >= 2) {
+        sh = sameLine[0].h; sm = sameLine[0].m; eh = sameLine[1].h; em = sameLine[1].m;
+      } else {
+        sh = pts[0].h; sm = pts[0].m;
+      }
+    }
   }
   if (sh !== null) {
     // 没有结束时间 → 默认「开始 + 1 小时」（分钟沿用）
@@ -3213,6 +3254,21 @@ async function runMeetingOcr(file, loadingMsg) {
   if (missing.length) msg += '　⚠ 未识别：' + missing.join('、') + '，请手动填写';
   showToast(msg, missing.length ? 'error' : 'success');
   console.log('OCR 原始文本：\n' + text);
+  // 把识别原文显示在表单里，便于核对与反馈
+  var rawBox = document.getElementById('ocrRawBox');
+  var rawText = document.getElementById('ocrRawText');
+  if (rawBox && rawText) { rawText.value = text; rawBox.style.display = 'block'; }
+}
+
+function copyOcrRaw() {
+  var el = document.getElementById('ocrRawText');
+  if (!el) return;
+  var done = function () { showToast('已复制识别原文'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(el.value).then(done, function () { fallbackCopyText(el.value, done); });
+  } else {
+    fallbackCopyText(el.value, done);
+  }
 }
 
 function removeExistingAttachment(tempId, filename) {
