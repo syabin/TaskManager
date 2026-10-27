@@ -3038,23 +3038,65 @@ function parseMeetingInviteText(raw) {
   var text = normalizeOcrText(raw);
   var lines = text.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l; });
   var res = { topic: '', date: '', start: '', end: '', durationHours: 0, organizer: '', room: '' };
+  var pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
 
-  // 「10月27日 周二 11:00 - 12:00」这类日期时间行
-  var dtRe = /(\d{1,2})\s*月\s*(\d{1,2})\s*日[^\n]{0,14}?(\d{1,2})\s*[:：]\s*(\d{2})\s*[-–—~～至到]\s*(\d{1,2})\s*[:：]\s*(\d{2})/;
-  var m = text.match(dtRe);
-  if (m) {
-    var mo = +m[1], dd = +m[2], sh = +m[3], sm = +m[4], eh = +m[5], em = +m[6];
-    var now = new Date();
-    var dt = new Date(now.getFullYear(), mo - 1, dd, sh, sm);
-    // 只识别到月日：若算出的日期已过去很久，按跨年会议处理
-    if (dt.getTime() < now.getTime() - 180 * 86400000) dt = new Date(now.getFullYear() + 1, mo - 1, dd, sh, sm);
-    res.date = fmtDateLocal(dt);
-    var pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
-    res.start = pad2(sh) + ':' + pad2(sm);
-    res.end = pad2(eh) + ':' + pad2(em);
+  // ---- 日期：10月27日 / 10月27号 / 10/27 / 10-27 ----
+  var dateM = text.match(/(\d{1,2})\s*[月\/.\-]\s*(\d{1,2})\s*[日号]?/);
+  var mo = 0, dd = 0;
+  if (dateM) { mo = +dateM[1]; dd = +dateM[2]; }
+
+  // ---- 时间：宽松匹配，容忍全角/半角冒号、点号、缺空格、分钟少一位 ----
+  // 区间：9:30 - 10:30 / 9：30~10：30 / 9.30—10.30 / 9点30-10点30 / 9：30－10：30
+  var sep = '[:：.、;；·]';
+  var dash = '[-–—﹣－~～至到]';
+  var rangeRe = new RegExp('(\\d{1,2})\\s*' + sep + '\\s*(\\d{1,2})\\s*' + dash + '\\s*(\\d{1,2})\\s*' + sep + '\\s*(\\d{1,2})');
+  var cnRangeRe = /(\d{1,2})\s*[点時时]\s*(\d{1,2})?\s*[-–—﹣－~～至到]\s*(\d{1,2})\s*[点時时]\s*(\d{1,2})?/;
+  var singleRe = new RegExp('(\\d{1,2})\\s*' + sep + '\\s*(\\d{1,2})');
+  var cnRe = /(\d{1,2})\s*[点時时]\s*(\d{1,2})?/;
+
+  var sh = null, sm = 0, eh = null, em = 0;
+  var rm = text.match(rangeRe);
+  var cm = text.match(cnRangeRe);
+  if (rm) {
+    sh = +rm[1]; sm = +rm[2]; eh = +rm[3]; em = +rm[4];
+  } else if (cm) {
+    sh = +cm[1]; sm = cm[2] ? +cm[2] : 0; eh = +cm[3]; em = cm[4] ? +cm[4] : 0;
+  } else {
+    var sm2 = text.match(singleRe);
+    if (sm2) { sh = +sm2[1]; sm = +sm2[2]; }
+    var cm2 = text.match(cnRe);
+    if (sh === null && cm2) { sh = +cm2[1]; sm = cm2[2] ? +cm2[2] : 0; }
+  }
+  if (sh !== null) {
+    // 没有结束时间 → 默认「开始 + 1 小时」（分钟沿用）
+    if (eh === null) { eh = sh + 1; em = sm; }
     var mins = (eh * 60 + em) - (sh * 60 + sm);
     if (mins < 0) mins += 24 * 60;          // 跨天会议
+    res.start = pad2(sh) + ':' + pad2(sm);
+    res.end = pad2(eh) + ':' + pad2(em);
     res.durationHours = Math.round(mins / 60 * 100) / 100;
+  }
+
+  // ---- 日期落地 ----
+  if (mo >= 1 && mo <= 12 && dd >= 1 && dd <= 31) {
+    var now = new Date();
+    var dt = new Date(now.getFullYear(), mo - 1, dd, sh !== null ? sh : 0, sm);
+    // 只识别到月日：若算出的日期已过去很久，按跨年会议处理
+    if (dt.getTime() < now.getTime() - 180 * 86400000) dt = new Date(now.getFullYear() + 1, mo - 1, dd, sh !== null ? sh : 0, sm);
+    res.date = fmtDateLocal(dt);
+  }
+
+  // ---- 时长兜底：文本里直接写了「2小时 / 30分钟 / 1天」 ----
+  if (!(res.durationHours > 0)) {
+    // 注意：不能用 \b —— 中文字符后不构成单词边界
+    var dm = text.match(/(\d+(?:\.\d+)?)\s*(小时|工作日|分钟|分|天|日)/);
+    if (dm) {
+      var v = parseFloat(dm[1]);
+      var u = dm[2];
+      if (u === '小时' || u === '工作日') res.durationHours = v;
+      else if (u === '分钟' || u === '分') res.durationHours = Math.round(v / 60 * 100) / 100;
+      else if (u === '天' || u === '日') res.durationHours = v * 8;   // 1 天 = 8 小时
+    }
   }
 
   // 发起人 / 会议室
@@ -3066,7 +3108,7 @@ function parseMeetingInviteText(raw) {
   // 主题：日期时间行之前、最靠前且像标题的一行
   var dtLineIdx = -1;
   for (var i = 0; i < lines.length; i++) {
-    if (/\d{1,2}\s*月\s*\d{1,2}\s*日/.test(lines[i]) || /\d{1,2}\s*[:：]\s*\d{2}\s*[-–—~～至到]\s*\d{1,2}\s*[:：]\s*\d{2}/.test(lines[i])) { dtLineIdx = i; break; }
+    if (/\d{1,2}\s*[月\/.\-]\s*\d{1,2}\s*[日号]?/.test(lines[i]) || new RegExp('\\d{1,2}\\s*' + sep + '\\s*\\d{1,2}').test(lines[i])) { dtLineIdx = i; break; }
   }
   var limit = dtLineIdx === -1 ? lines.length : dtLineIdx;
   for (var j = 0; j < limit; j++) {
@@ -3074,14 +3116,27 @@ function parseMeetingInviteText(raw) {
     if (!l || l.length < 3) continue;
     // 「会议主题：xxx」这类带前缀的行：剥掉前缀当主题
     var tm = l.match(/^(?:会议主题|会议邀请|会议|主题)\s*[：:]\s*(.+)$/);
-    if (tm) { res.topic = tm[1].trim(); break; }
-    if (/^(发起人|参会人|会议室|复制链接|进入会议|转发|添加同事)/.test(l)) continue;
-    if (/^\d{1,2}[:：]\d{2}/.test(l)) continue;
+    if (tm) { res.topic = tm[1]; break; }
+    if (/^(发起人|参会人|会议室|复制链接|进入会议|转发|添加同事|已参会|未参会)/.test(l)) continue;
+    if (/^\d{1,2}[:：.、;；·]?\d{0,2}/.test(l) && /^[\d\s:：.、;；·-]+$/.test(l)) continue;
     res.topic = l;
     break;
   }
   if (!res.topic && lines.length) res.topic = lines[0];
+  res.topic = cleanOcrTopic(res.topic);
   return res;
+}
+
+// 清洗主题：去掉 OCR 噪音（尾部乱码、引号残留、「外部/内部」等角标）
+function cleanOcrTopic(s) {
+  var t = String(s || '').trim();
+  // 去掉形如「 ¿s」「 ¿」的孤立乱码尾巴（1~2 个非中文小写字母 + 倒问号）
+  t = t.replace(/\s*[¿¡]{0,2}[a-zA-Z]{1,2}$/, '');
+  // 去掉行尾连续的符号类噪音（引号、书名号、标点等）
+  t = t.replace(/[“”"'‘’`´《》【】()（）\[\]{}<>·・、，。；：!！?？~～\-\|/\\*#@$%^&+=_]+$/, '');
+  // 去掉角标词（外部/内部/公开/私密）
+  t = t.replace(/\s*(外部|内部|公开|私密|机密)$/, '');
+  return t.trim();
 }
 
 // 把识别结果回填到临时事项表单
@@ -3148,7 +3203,15 @@ async function runMeetingOcr(file, loadingMsg) {
   var extra = [];
   if (info.organizer) extra.push('发起人 ' + info.organizer);
   if (info.room) extra.push(info.room);
-  showToast('已识别并填入：' + filled.join('、') + (extra.length ? '（' + extra.join(' · ') + '）' : ''), 'success');
+  // 明确告知哪些没识别出来，避免用户以为已经填好
+  var missing = [];
+  if (!info.topic) missing.push('主题');
+  if (!info.date) missing.push('日期');
+  if (!(info.durationHours > 0)) missing.push('时长');
+  var msg = filled.length ? ('已识别并填入：' + filled.join('、')) : '未识别出可填内容';
+  if (extra.length) msg += '（' + extra.join(' · ') + '）';
+  if (missing.length) msg += '　⚠ 未识别：' + missing.join('、') + '，请手动填写';
+  showToast(msg, missing.length ? 'error' : 'success');
   console.log('OCR 原始文本：\n' + text);
 }
 
