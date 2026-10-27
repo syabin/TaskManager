@@ -2628,6 +2628,14 @@ function setProjectAttr(projectName, value) {
   showToast('项目属性已更新：' + projectName + ' → ' + (value || '未设置'));
 }
 
+// 延期记录时间线里交付件记录的归位日期：有开始处理日期时以它为准
+// （与列表「日期」列、周期汇报的口径保持一致；仅影响时间线排序与展示，不动顺延计算）
+function delayRecordStatDate(r) {
+  if (!r) return '';
+  if (r.type === 'delivery') return r.processStartDate || r.deliveryDate || r.date || '';
+  return r.date || '';
+}
+
 function showTaskDelays(taskId) {
   const data = loadData();
   const task = data.tasks.find(t => t.id === taskId);
@@ -2640,10 +2648,10 @@ function showTaskDelays(taskId) {
 
   // Sort by date, then by input time (createdAt) for same-day ordering
   const sorted = [...activeDelayRecords(task)].sort((a, b) => {
-    const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
+    const dCmp = dOnly(delayRecordStatDate(a)).localeCompare(dOnly(delayRecordStatDate(b)));
     if (dCmp !== 0) return dCmp;
-    const da = a.date || '';
-    const db = b.date || '';
+    const da = delayRecordStatDate(a) || '';
+    const db = delayRecordStatDate(b) || '';
     if (da !== db) return da.localeCompare(db);
     return (a.createdAt || '').localeCompare(b.createdAt || '');
   });
@@ -2661,10 +2669,10 @@ function showTaskDelays(taskId) {
     if (doneDT) completionEvents.push({ _completion: true, date: doneDT, createdAt: doneDT });
   }
   const merged = [...sorted, ...pauseEvents, ...completionEvents].sort((a, b) => {
-    const dCmp = dOnly(a.date).localeCompare(dOnly(b.date));
+    const dCmp = dOnly(delayRecordStatDate(a)).localeCompare(dOnly(delayRecordStatDate(b)));
     if (dCmp !== 0) return dCmp;
-    const da = a.date || '';
-    const db = b.date || '';
+    const da = delayRecordStatDate(a) || '';
+    const db = delayRecordStatDate(b) || '';
     if (da !== db) return da.localeCompare(db);
     return (a.createdAt || '').localeCompare(b.createdAt || '');
   });
@@ -2709,8 +2717,10 @@ function showTaskDelays(taskId) {
     } else if (record.type === 'delivery') {
       const processHours = record.processHours || 0;
       const processDays = hoursToWorkingDaysOffset(processHours);
-      const baselineDate = record.effectType === 'process' ? (record.processStartDate || record.deliveryDate) : record.deliveryDate;
-      const deliveryEnd = addWorkingDays(baselineDate, processDays);
+      // 计算基准不变（阻塞自交付件到达日、占用自开始处理日）；展示日期统一用开始处理日期
+      const calcBase = record.effectType === 'process' ? (record.processStartDate || record.deliveryDate) : record.deliveryDate;
+      const showDate = record.processStartDate || record.deliveryDate || record.date;
+      const deliveryEnd = addWorkingDays(calcBase, processDays);
       const tempEnd = addWorkingDays(segmentBaseline, hoursToWorkingDaysOffset(accumulatedHours));
       if (deliveryEnd > tempEnd) {
         segmentBaseline = deliveryEnd;
@@ -2719,7 +2729,7 @@ function showTaskDelays(taskId) {
       const effectLabel = record.effectType === 'process' ? '处理占用' : '交付件阻塞';
       tag = '<span style="background:#e8f5e9;color:#2e7d32;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">交付件更新</span>' +
             '<span style="background:#d4edda;color:#155724;padding:2px 6px;border-radius:4px;font-size:11px;margin-right:6px;">' + effectLabel + '</span>';
-      desc = `${formatDate(baselineDate)} · 处理 ${processHours}h → 延后 ${processDays} 个工作日`;
+      desc = `${formatDate(showDate)} · 处理 ${processHours}h → 延后 ${processDays} 个工作日`;
       const deliveryItem = record.causedByDeliveryItemId ? data.deliveryItems.find(di => di.id === record.causedByDeliveryItemId) : null;
       if (deliveryItem) {
         extra = `<div class="timeline-desc" style="margin-top:4px; display:flex; align-items:center; gap:8px;">
