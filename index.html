@@ -696,6 +696,10 @@ try {
       </label>
       <button class="btn btn-danger" onclick="clearAllData()">清空所有数据</button>
     </div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:12px;">
+      <button class="btn btn-outline" onclick="exportExcel()">导出 Excel</button>
+      <span style="font-size:12px; color:var(--text-muted);">导出为 .xlsx，包含「待办任务 / 临时事项 / 交付件更新」三个工作表</span>
+    </div>
     <div style="margin-top:16px; font-size:13px; color:#666;">
       <p>当前数据量：<span id="dataCount"></span></p>
     </div>
@@ -5923,6 +5927,100 @@ function exportData() {
   a.click();
   URL.revokeObjectURL(url);
   showToast("数据已导出");
+}
+
+// ====== Excel 导出 ======
+let _xlsxPromise = null;
+function loadXlsxLib() {
+  if (window.XLSX) return Promise.resolve();
+  if (_xlsxPromise) return _xlsxPromise;
+  _xlsxPromise = new Promise(function (resolve, reject) {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload = function () { resolve(); };
+    s.onerror = function () { _xlsxPromise = null; reject(new Error('xlsx load failed')); };
+    document.head.appendChild(s);
+  });
+  return _xlsxPromise;
+}
+
+// 把受影响任务 ID 列表转成「[项目号] 任务名称」文本
+function affectedIdsToNames(data, ids) {
+  return (ids || []).map(function (tid) {
+    const t = data.tasks.find(function (x) { return x.id === tid; });
+    return t ? '[' + t.projectName + '] ' + t.taskName : '';
+  }).filter(function (s) { return s !== ''; }).join('；');
+}
+
+function buildExcelSheets(data) {
+  const taskRows = data.tasks.map(function (t) {
+    const recs = activeDelayRecords(t) || [];
+    return {
+      '项目号': t.projectName || '',
+      '项目名称': t.projectTitle || '',
+      '任务名称': t.taskName || '',
+      '开始时间': t.startDate || '',
+      '计划完成时间': t.plannedEndDate || '',
+      '计划调整': t.adjustedEndDate || '',
+      '当前完成时间': t.currentEndDate || '',
+      '状态': t.status || '',
+      '计划外': t.unplanned ? '是' : '',
+      '延期/变更次数': recs.filter(function (r) { return r.type !== 'status' && r.type !== 'complete'; }).length,
+      '创建时间': (t.createdAt || '').replace('T', ' ').substring(0, 16)
+    };
+  });
+  const tempRows = data.tempItems.map(function (item) {
+    const plannedItem = item.status === 'planned';
+    return {
+      '类型': plannedItem ? '预期事件' : '临时事项',
+      '日期': item.date || '',
+      '时长': plannedItem
+        ? (item.durationValue > 0 ? '预计 ' + (item.durationUnit === 'd' ? item.durationValue + ' 天' : item.durationValue + ' 小时') : '待定')
+        : (item.durationUnit === 'd' ? item.durationValue + ' 天' : item.durationValue + ' 小时'),
+      '说明': item.description || '',
+      '计划外': item.unplanned ? '是' : (item.unplannedAdjusted ? '计划已调整' : ''),
+      '影响任务': affectedIdsToNames(data, item.affectedTaskIds),
+      '附件数': item.attachments ? item.attachments.length : 0,
+      '创建时间': (item.createdAt || '').replace('T', ' ').substring(0, 16)
+    };
+  });
+  const deliveryRows = data.deliveryItems.map(function (item) {
+    const plannedItem = item.status === 'planned';
+    const statDate = getDeliveryStatDate(item);
+    return {
+      '类型': plannedItem ? '预期交付件' : '交付件更新',
+      '统计日期': statDate,
+      '交付日期': item.deliveryDate || item.date || '',
+      '开始处理日期': item.processStartDate || '',
+      '处理时长': item.processUnit === 'd' ? (item.processValue || 0) + ' 天' : (item.processValue || 0) + ' 小时',
+      '说明': item.description || '',
+      '计划外': item.unplanned ? '是' : (item.unplannedAdjusted ? '计划已调整' : ''),
+      '阻塞影响任务': affectedIdsToNames(data, item.blockAffectedTaskIds),
+      '占用影响任务': affectedIdsToNames(data, item.processAffectedTaskIds),
+      '附件数': item.attachments ? item.attachments.length : 0,
+      '创建时间': (item.createdAt || '').replace('T', ' ').substring(0, 16)
+    };
+  });
+  return [
+    { name: '待办任务', rows: taskRows },
+    { name: '临时事项', rows: tempRows },
+    { name: '交付件更新', rows: deliveryRows }
+  ];
+}
+
+function exportExcel() {
+  loadXlsxLib().then(function () {
+    const data = loadData();
+    const wb = XLSX.utils.book_new();
+    buildExcelSheets(data).forEach(function (sh) {
+      const ws = XLSX.utils.json_to_sheet(sh.rows.length > 0 ? sh.rows : [{}]);
+      XLSX.utils.book_append_sheet(wb, ws, sh.name);
+    });
+    XLSX.writeFile(wb, 'task-manager-' + fmtDateLocal(new Date()) + '.xlsx');
+    showToast('Excel 已导出');
+  }).catch(function () {
+    showToast('Excel 组件加载失败，请检查网络后重试', 'error');
+  });
 }
 
 function importData(event) {
