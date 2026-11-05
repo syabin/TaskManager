@@ -644,9 +644,9 @@ try {
     <div class="hm-layout">
       <div class="hm-left">
         <div class="hm-legend">
-          <span class="hm-legend-label">当日临时事项累计时长</span>
+          <span class="hm-legend-label">当日累计时长（临时事项 + 交付件更新）</span>
           <span>少</span>
-          <span class="hm-legend-cell hm-l0" title="无临时事项"></span>
+          <span class="hm-legend-cell hm-l0" title="无记录"></span>
           <span class="hm-legend-cell hm-l1" title="不足 4h"></span>
           <span class="hm-legend-cell hm-l2" title="4 ~ 8h"></span>
           <span class="hm-legend-cell hm-l3" title="8 ~ 16h"></span>
@@ -659,7 +659,7 @@ try {
         <div id="hmGrid" class="hm-grid"></div>
       </div>
       <div class="hm-right">
-        <div class="hm-trend-title">每日临时事项时长趋势（休息日无事项不绘制）</div>
+        <div class="hm-trend-title">每日累计时长趋势（含临时事项与交付件更新，休息日无事项不绘制）</div>
         <div id="hmTrend"></div>
       </div>
     </div>
@@ -5239,8 +5239,8 @@ function renderReview() {
 }
 
 // ====== 延期热力图（月视图） ======
-// 每天一个格子，格子数值 = 当日累计临时事项时长（小时）；红色越深当日临时事项越密集。
-// 交付件更新与计划调整不计入格子热值，仅在当日明细中附注展示。
+// 每天一个格子，格子数值 = 当日累计时长（小时）= 临时事项时长 + 交付件更新处理时长；红色越深当日越密集。
+// 计划调整不产生时长，不计入格子热值，仅在当日明细中附注展示。
 var _hmYear = 0, _hmMonth = 0; // _hmMonth: 1-12
 
 function hmInitMonth() {
@@ -5266,6 +5266,7 @@ function hmChangeYear(delta) {
 
 // 归集某月每天的数据：{ 'YYYY-MM-DD': { count, hours, workdays, items:[临时事项], deliveries:[], adjusts } }
 // 临时事项按事项日期归集，累计时长统一换算为小时（durationUnit 'd' × 8）
+// 交付件更新按记录日期归集，其处理时长一并计入当日累计时长与事项数（同一交付件对多任务只计一次）
 function collectDailyDelays(data, year, month) {
   const prefix = year + '-' + String(month).padStart(2, '0');
   const days = {};
@@ -5282,7 +5283,7 @@ function collectDailyDelays(data, year, month) {
     e.items.push({ kind: 'temp', item, hours });
   });
 
-  // 交付件更新（按 causedByDeliveryItemId 聚合）/ 计划调整：不计入格子热值，仅供明细附注
+  // 交付件更新（按 causedByDeliveryItemId 聚合）/ 计划调整
   data.tasks.forEach(t => {
     activeDelayRecords(t).forEach(r => {
       const day = dOnly(r.date);
@@ -5294,8 +5295,13 @@ function collectDailyDelays(data, year, month) {
         const key = r.causedByDeliveryItemId || ('rec-' + r.id);
         let g = e.deliveries.find(d => d.key === key);
         if (!g) {
-          g = { key, desc: r.reason || '（无描述）', hours: r.processHours || 0, date: r.date, tasks: [] };
+          const dh = r.processHours || 0;
+          g = { key, desc: r.reason || '（无描述）', hours: dh, date: r.date, tasks: [] };
           e.deliveries.push(g);
+          // 首次遇到该交付件时计入当日热值：时长进 hours，事项数进 count，工作日同口径
+          e.count++;
+          e.hours += dh;
+          e.workdays += hoursToWorkingDaysOffset(dh);
         }
         if (!g.tasks.some(x => x.projectName === t.projectName && x.taskName === t.taskName)) {
           g.tasks.push({ projectName: t.projectName, taskName: t.taskName });
@@ -5306,7 +5312,7 @@ function collectDailyDelays(data, year, month) {
   return days;
 }
 
-// 热力分档（按当日临时事项累计小时数）：0 无记录 / 1 <4h / 2 4~8h / 3 8~16h / 4 ≥16h
+// 热力分档（按当日累计小时数，临时事项 + 交付件更新）：0 无记录 / 1 <4h / 2 4~8h / 3 8~16h / 4 ≥16h
 function hmLevel(entry) {
   if (!entry || entry.count === 0) return 0;
   const h = entry.hours;
@@ -5333,15 +5339,16 @@ function renderHeatmap() {
   const data = loadData();
   const days = collectDailyDelays(data, _hmYear, _hmMonth);
 
-  // 当月统计（口径：临时事项）
+  // 当月统计（口径：临时事项 + 交付件更新）
   const dayKeys = Object.keys(days).filter(d => days[d].count > 0);
   const totalHours = dayKeys.reduce((s, d) => s + days[d].hours, 0);
   const totalCount = dayKeys.reduce((s, d) => s + days[d].count, 0);
+  const totalDeliveries = dayKeys.reduce((s, d) => s + days[d].deliveries.length, 0);
   let peakDay = '', peakVal = 0;
   dayKeys.forEach(d => { if (days[d].hours > peakVal) { peakVal = days[d].hours; peakDay = d; } });
   document.getElementById('hmStats').innerHTML = `
-    <div class="stat-card"><div class="stat-value">${dayKeys.length}</div><div class="stat-label">有临时事项天数</div></div>
-    <div class="stat-card"><div class="stat-value">${totalCount}</div><div class="stat-label">临时事项数</div></div>
+    <div class="stat-card"><div class="stat-value">${dayKeys.length}</div><div class="stat-label">有记录天数</div></div>
+    <div class="stat-card"><div class="stat-value">${totalCount}</div><div class="stat-label">事项数${totalDeliveries ? '（含交付 ' + totalDeliveries + '）' : ''}</div></div>
     <div class="stat-card"><div class="stat-value" style="color:var(--danger);">${hmHoursText(totalHours)}</div><div class="stat-label">累计时长</div></div>
     <div class="stat-card"><div class="stat-value" style="font-size:14px;">${peakDay ? peakDay.slice(5) + '（' + hmHoursText(peakVal) + '）' : '-'}</div><div class="stat-label">峰值日</div></div>
   `;
@@ -5363,8 +5370,8 @@ function renderHeatmap() {
     if (entry && entry.count > 0) cls.push('hm-clickable');
     const valText = entry && entry.count > 0 ? hmHoursText(entry.hours) : '';
     const title = entry && entry.count > 0
-      ? dayStr + ' · 临时事项 ' + entry.count + ' 项 · 累计 ' + hmHoursText(entry.hours) + (entry.adjusts ? ' · 另有 ' + entry.adjusts + ' 次计划调整' : '') + (entry.deliveries.length ? ' · ' + entry.deliveries.length + ' 次交付件更新' : '') + '（点击查看明细）'
-      : dayStr + (isFuture ? ' · 未到日期' : ' · 无临时事项');
+      ? dayStr + ' · ' + entry.count + ' 项' + (entry.deliveries.length ? '（含 ' + entry.deliveries.length + ' 次交付件更新）' : '') + ' · 累计 ' + hmHoursText(entry.hours) + (entry.adjusts ? ' · 另有 ' + entry.adjusts + ' 次计划调整' : '') + '（点击查看明细）'
+      : dayStr + (isFuture ? ' · 未到日期' : ' · 无记录');
     const onclick = entry && entry.count > 0 ? ` onclick="showHeatmapDayDetail('${dayStr}')"` : '';
     html += `<div class="${cls.join(' ')}" title="${title}"${onclick}><span class="hm-day">${d}</span>${valText ? '<span class="hm-val">' + valText + '</span>' : ''}</div>`;
   }
@@ -5375,8 +5382,8 @@ function renderHeatmap() {
   renderHmTrend(days, _hmYear, _hmMonth);
 }
 
-// 折线图：当月每日临时事项累计时长趋势
-// 绘制规则：只画到今天；休息日（周六/周日/节假日，调休上班日除外）当天无临时事项则跳过、不画点（线跨接过去）；8h 处画红色虚线阈值线
+// 折线图：当月每日累计时长趋势（临时事项 + 交付件更新处理时长）
+// 绘制规则：只画到今天；休息日（周六/周日/节假日，调休上班日除外）当天无记录则跳过、不画点（线跨接过去）；8h 处画红色虚线阈值线
 // 高度自适应：先按默认高度绘制，再按左侧热力图实测高度换算 viewBox 高度重绘，使两栏视觉等高
 function renderHmTrend(days, year, month) {
   const wrap = document.getElementById('hmTrend');
@@ -5459,7 +5466,7 @@ function showHeatmapDayDetail(dayStr) {
   const data = loadData();
   const days = collectDailyDelays(data, +dayStr.slice(0, 4), +dayStr.slice(5, 7));
   const entry = days[dayStr];
-  if (!entry || entry.count === 0) { showToast('当日无临时事项'); return; }
+  if (!entry || entry.count === 0) { showToast('当日无记录'); return; }
   // 明细按时间升序（事项时间从早到晚），避免按数组顺序乱序
   const sortedTemps = entry.items.slice().sort((a, b) => (a.item.date || '').localeCompare(b.item.date || ''));
   const tempRows = sortedTemps.map(e => {
@@ -5474,9 +5481,8 @@ function showHeatmapDayDetail(dayStr) {
   }).join('');
   const extraNotes = [];
   if (entry.adjusts) extraNotes.push(`${entry.adjusts} 次计划调整`);
-  if (entry.deliveries.length) extraNotes.push(`${entry.deliveries.length} 次交付件更新`);
   const extraNote = extraNotes.length
-    ? `<p style="font-size:12px;color:var(--text-muted);margin:10px 0 8px;">当日另有 ${extraNotes.join('、')}（不计入格子时长）。</p>` : '';
+    ? `<p style="font-size:12px;color:var(--text-muted);margin:10px 0 8px;">当日另有 ${extraNotes.join('、')}（不计入时长）。</p>` : '';
   // 交付件条目同样按时间升序
   const sortedDeliveries = entry.deliveries.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const deliveryRows = sortedDeliveries.map(e => {
@@ -5487,15 +5493,21 @@ function showHeatmapDayDetail(dayStr) {
     return `<div class="report-item">
       <span class="report-item-tag" style="background:#dbeafe;color:#1d4ed8;">📦 交付件更新</span>
       <span class="report-item-main">${escAttr(e.desc)}</span>
-      <span class="report-item-meta">${formatDate(e.date).slice(11)} · 处理 ${e.hours}h · 导致 ${shown}${more}延期</span>
+      <span class="report-item-meta">${formatDate(e.date).slice(11)} · 计入 ${e.hours}h · 导致 ${shown}${more}延期</span>
     </div>`;
   }).join('');
+  // 汇总口径：临时事项 + 交付件更新（两者时长均已计入）
+  const tempCount = entry.items.length;
+  const delivCount = entry.deliveries.length;
+  const countText = delivCount > 0
+    ? `当日共 ${entry.count} 项（临时事项 ${tempCount} 项 · 交付件更新 ${delivCount} 项）`
+    : `当日共 ${tempCount} 项临时事项`;
   openModal(`
     <div class="modal-header">
       <h3>当日明细 - ${dayStr}</h3>
       <button class="modal-close" onclick="closeModal()">&times;</button>
     </div>
-    <p style="font-size:13px; color:#666; margin-bottom:12px;">当日共 ${entry.count} 项临时事项，累计 ${hmHoursText(entry.hours)}（${entry.workdays.toFixed(1)} 个工作日）。</p>
+    <p style="font-size:13px; color:#666; margin-bottom:12px;">${countText}，累计 ${hmHoursText(entry.hours)}（${entry.workdays.toFixed(1)} 个工作日）。</p>
     <div class="report-day-body" style="border:none; padding:0;">${tempRows}</div>
     ${extraNote}
     ${deliveryRows ? '<div class="report-day-body" style="border:none; padding:0;">' + deliveryRows + '</div>' : ''}
