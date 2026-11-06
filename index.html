@@ -5283,31 +5283,45 @@ function collectDailyDelays(data, year, month) {
     e.items.push({ kind: 'temp', item, hours });
   });
 
-  // 交付件更新（按 causedByDeliveryItemId 聚合）/ 计划调整
+  // 计划调整：不产生时长，仅当日明细附注
   data.tasks.forEach(t => {
     activeDelayRecords(t).forEach(r => {
+      if (r.type !== 'adjust') return;
       const day = dOnly(r.date);
       if (!day || day.indexOf(prefix) !== 0) return;
-      if (r.type === 'adjust') { ensure(day).adjusts++; }
-      else if (r.type === 'delivery') {
-        // 同一交付件对多个任务只聚合为一条：主描述=交付件说明，附受影响任务清单
-        const e = ensure(day);
-        const key = r.causedByDeliveryItemId || ('rec-' + r.id);
-        let g = e.deliveries.find(d => d.key === key);
-        if (!g) {
-          const dh = r.processHours || 0;
-          g = { key, desc: r.reason || '（无描述）', hours: dh, date: r.date, tasks: [] };
-          e.deliveries.push(g);
-          // 首次遇到该交付件时计入当日热值：时长进 hours，事项数进 count，工作日同口径
-          e.count++;
-          e.hours += dh;
-          e.workdays += hoursToWorkingDaysOffset(dh);
-        }
-        if (!g.tasks.some(x => x.projectName === t.projectName && x.taskName === t.taskName)) {
-          g.tasks.push({ projectName: t.projectName, taskName: t.taskName });
-        }
+      ensure(day).adjusts++;
+    });
+  });
+
+  // 交付件更新：先跨任务、跨记录聚合（同一交付件会生成阻塞/占用两条延期记录，
+  // 分别挂在更新日期与处理日期上，若各自入账会重复计时长），再统一挂到统计日期
+  //（开始处理日期优先，无处理记录时退回交付日期），全局只计一次时长
+  const deliveryAgg = {};
+  data.tasks.forEach(t => {
+    activeDelayRecords(t).forEach(r => {
+      if (r.type !== 'delivery') return;
+      const key = r.causedByDeliveryItemId || ('rec-' + r.id);
+      if (!deliveryAgg[key]) {
+        deliveryAgg[key] = { key, desc: r.reason || '（无描述）', hours: r.processHours || 0, statDate: '', tasks: [] };
+      }
+      const g = deliveryAgg[key];
+      // 统计日期：占用（process）记录带开始处理日期，优先级最高；否则用阻塞记录的交付日期
+      if (r.effectType === 'process' && r.processStartDate) g.statDate = r.processStartDate;
+      else if (!g.statDate && r.deliveryDate) g.statDate = r.deliveryDate;
+      if (!g.tasks.some(x => x.projectName === t.projectName && x.taskName === t.taskName)) {
+        g.tasks.push({ projectName: t.projectName, taskName: t.taskName });
       }
     });
+  });
+  Object.keys(deliveryAgg).forEach(key => {
+    const g = deliveryAgg[key];
+    const day = dOnly(g.statDate);
+    if (!day || day.indexOf(prefix) !== 0) return;
+    const e = ensure(day);
+    e.count++;
+    e.hours += g.hours;
+    e.workdays += hoursToWorkingDaysOffset(g.hours);
+    e.deliveries.push({ key: g.key, desc: g.desc, hours: g.hours, date: g.statDate, tasks: g.tasks });
   });
   return days;
 }
