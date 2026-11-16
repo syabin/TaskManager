@@ -6363,7 +6363,11 @@ async function ghShowDiff() {
   }
   let remoteObj;
   try { remoteObj = JSON.parse(remote.text); }
-  catch (e) { showToast('远端文件不是合法 JSON，无法对比', 'error'); setGhStatus('远端文件解析失败'); return; }
+  catch (e) {
+    const head = String(remote.text || '').replace(/\s+/g, ' ').slice(0, 120);
+    showToast('远端文件不是合法 JSON，无法对比（远端 ' + Math.round((remote.size || 0) / 1024) + ' KB；开头：' + (head || '空') + '）', 'error');
+    setGhStatus('远端文件解析失败'); return;
+  }
 
   const local = loadData();
   const d = computeDataDiff(local, remoteObj, remote.sha);
@@ -6714,11 +6718,35 @@ function ghAttachmentPath(cfg, itemId, fileName, kind) {
   return kind === 'delivery' ? `${root}/delivery/${itemId}/${fileName}` : `${root}/${itemId}/${fileName}`;
 }
 
-// 读取远端数据文件；不存在返回 null
-async function ghFetchRemote() {
+// 通用：读取仓库中单个文件的完整内容（数据文件与附件共用）。
+// 注意 GitHub Contents API 的限制：文件 >1MB 时只返回元数据，
+// content 为空字符串且 encoding 为 "none"，直接 base64 解码会得到空串，
+// 进而被误判为「不是合法 JSON」。此时必须按 sha 改走 Git Blobs API（支持到 100MB）。
+async function ghFetchFile(cfg, path, opts) {
+  const metaOnly = !!(opts && opts.metaOnly); // 只要 sha 时不必下载正文（冲突检测用）
+  const j = await ghApi('GET', ghPathUrl(cfg, path, '?ref=' + encodeURIComponent(cfg.branch)));
+  if (Array.isArray(j)) throw new Error('路径 ' + path + ' 指向的是目录而非文件，请检查配置');
+  let bytes = null, text = '';
+  if (!metaOnly) {
+    if (j.encoding === 'base64' && j.content) {
+      bytes = ghB64DecodeBytes(j.content);
+    } else {
+      if (!j.sha) throw new Error('远端文件 ' + path + ' 缺少 sha，无法读取内容');
+      const blob = await ghApi('GET', `${GH_API}/repos/${cfg.repo}/git/blobs/${encodeURIComponent(j.sha)}`);
+      if (!blob || blob.encoding !== 'base64' || typeof blob.content !== 'string') {
+        throw new Error('读取远端大文件失败（Blobs API 未返回内容）：' + path);
+      }
+      bytes = ghB64DecodeBytes(blob.content);
+    }
+    text = new TextDecoder().decode(bytes);
+  }
+  return { sha: j.sha, bytes: bytes, text: text, size: j.size || 0 };
+}
+
+// 读取远端数据文件；不存在时 ghApi 抛出 404
+async function ghFetchRemote(opts) {
   const cfg = ghConfig();
-  const j = await ghApi('GET', ghFileUrl(cfg, '?ref=' + encodeURIComponent(cfg.branch)));
-  return { sha: j.sha, text: ghB64Decode(j.content || '') };
+  return ghFetchFile(cfg, cfg.path, opts);
 }
 
 function handleGhError(e) {
@@ -6746,7 +6774,7 @@ async function ghTestConn() {
     const repo = await ghApi('GET', `${GH_API}/repos/${cfg.repo}`);
     let extra = '';
     try {
-      const remote = await ghFetchRemote();
+      const remote = await ghFetchRemote({ metaOnly: true });
       extra = `，数据文件 sha <code>${escAttr(remote.sha.slice(0, 7))}</code>`;
     } catch (e) { if (e.status !== 404) throw e; extra = '，远端暂无数据文件'; }
     setGhStatus(`<span style="color:#198754;">连接正常：${escAttr(repo.full_name)}（${repo.private ? '私有' : '公开'}）${extra}</span>`);
@@ -6931,9 +6959,8 @@ async function ghDownloadAttachments(cfg, data) {
     if (r.file && (!a.size || r.file.size === a.size)) { unchanged++; continue; }
     setGhStatus(`正在下载附件 ${i + 1}/${list.length}：${escAttr(a.name)}`);
     try {
-      const j = await ghApi('GET', ghPathUrl(cfg, ghAttachmentPath(cfg, a.item.id, a.name, a.kind), '?ref=' + encodeURIComponent(cfg.branch)));
-      const bytes = ghB64DecodeBytes(j.content || '');
-      const ok = await ghWriteLocalAttachment(a.item, a.name, bytes);
+      const f = await ghFetchFile(cfg, ghAttachmentPath(cfg, a.item.id, a.name, a.kind));
+      const ok = await ghWriteLocalAttachment(a.item, a.name, f.bytes);
       if (ok) saved++; else { missing++; details.push(`${label}：写入本地失败`); }
     } catch (e) {
       missing++;
@@ -6957,7 +6984,7 @@ async function ghUpload(opts) {
   setGhStatus('正在检查远端状态…');
   try {
     let remote = null;
-    try { remote = await ghFetchRemote(); }
+    try { remote = await ghFetchRemote({ metaOnly: true }); }
     catch (e) { if (e.status !== 404) throw e; }
 
     const sync = ghGetSync();
@@ -7049,7 +7076,10 @@ async function ghPull() {
     }
     let obj;
     try { obj = JSON.parse(remote.text); }
-    catch (e) { throw new Error('远端文件不是合法 JSON，已中止覆盖'); }
+    catch (e) {
+      const head = String(remote.text || '').replace(/\s+/g, ' ').slice(0, 120);
+      throw new Error('远端文件不是合法 JSON，已中止覆盖（远端 ' + Math.round((remote.size || 0) / 1024) + ' KB；内容开头：' + (head || '空') + '）');
+    }
     if (!obj || !Array.isArray(obj.tasks)) throw new Error('远端文件结构异常（缺少 tasks 数组），已中止覆盖');
     saveData(obj); // 经 saveData 写入，落在撤回栈内，可撤回
     let attNote = '', attDetails = '';
