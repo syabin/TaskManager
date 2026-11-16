@@ -710,7 +710,7 @@ try {
       <span class="card-title">GitHub 数据同步</span>
     </div>
     <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
-      把任务数据同步到私有仓库 <code>syabin/task-data</code> 的 <code>data/task-data.json</code>。若其他设备已改动远端文件，本次上传会<b>拒绝覆盖</b>并提示。
+      把任务数据同步到私有仓库 <code>syabin/task-data</code> 的 <code>TaskManager/task-data.json</code>。若其他设备已改动远端文件，本次上传会<b>拒绝覆盖</b>并提示。
     </p>
     <div class="form-row">
       <div class="form-group" style="min-width:150px;">
@@ -719,7 +719,7 @@ try {
       </div>
       <div class="form-group" style="min-width:200px;">
         <label>文件路径</label>
-        <input type="text" id="ghPath" value="data/task-data.json" autocomplete="off">
+        <input type="text" id="ghPath" value="TaskManager/task-data.json" autocomplete="off">
       </div>
       <div class="form-group" style="min-width:110px;">
         <label>分支</label>
@@ -727,7 +727,7 @@ try {
       </div>
       <div class="form-group" style="min-width:190px;">
         <label>附件路径</label>
-        <input type="text" id="ghAttPath" value="data/attachments" autocomplete="off">
+        <input type="text" id="ghAttPath" value="TaskManager/attachments" autocomplete="off">
       </div>
       <div class="form-group" style="justify-content:flex-end;">
         <label>&nbsp;</label>
@@ -767,7 +767,7 @@ try {
       勾选 <code>Contents: Read and write</code>。令牌仅保存在本机（默认不落盘，勾选「记住」才存），不会写进导出的数据文件。
     </p>
     <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">
-      附件同步：附件本体存到 <code data/attachments/&lt;事项ID&gt;/&lt;文件名&gt;</code>，数据文件只保留清单。上传需已授权本地存档目录；单附件上限 20MB，超限会跳过并在状态行提示。
+      附件同步：附件本体存到 <code>TaskManager/attachments/&lt;事项ID&gt;/&lt;文件名&gt;</code>，数据文件只保留清单。上传需已授权本地存档目录；单附件上限 20MB，超限会跳过并在状态行提示。
     </p>
   </div>
 
@@ -6550,7 +6550,7 @@ function ghOnAutoSyncToggle() {
 }
 
 // ====== GitHub 数据同步（Contents API） ======
-// 数据文件默认存于私有仓库 syabin/task-data 的 data/task-data.json。
+// 数据文件默认存于私有仓库 syabin/task-data 的 TaskManager/task-data.json。
 // 冲突策略：上传前比对上次同步记录的远端 sha，不一致即拒绝覆盖并提示（保护其他设备的改动）。
 const GH_CONFIG_KEY = 'tm-gh-config';
 const GH_TOKEN_KEY = 'tm-gh-token';
@@ -6565,9 +6565,9 @@ function ghConfig() {
   const autoBox = document.getElementById('ghAutoSync');
   return {
     repo: ghVal('ghRepo') || 'syabin/task-data',
-    path: ghVal('ghPath') || 'data/task-data.json',
+    path: ghVal('ghPath') || 'TaskManager/task-data.json',
     branch: ghVal('ghBranch') || 'main',
-    attPath: ghVal('ghAttPath') || 'data/attachments',
+    attPath: ghVal('ghAttPath') || 'TaskManager/attachments',
     syncAttachments: attBox ? attBox.checked : true,
     autoSync: autoBox ? autoBox.checked : false
   };
@@ -6586,11 +6586,16 @@ function ghSaveConfig() {
 function ghLoadConfig() {
   let cfg = {};
   try { cfg = JSON.parse(localStorage.getItem(GH_CONFIG_KEY) || '{}'); } catch (e) {}
+  // 一次性迁移：旧默认路径 data/ → TaskManager/（仅当路径仍是旧默认值，尊重用户自定义路径）
+  let cfgDirty = false;
+  if (cfg.path === 'data/task-data.json') { cfg.path = 'TaskManager/task-data.json'; cfgDirty = true; }
+  if (cfg.attPath === 'data/attachments') { cfg.attPath = 'TaskManager/attachments'; cfgDirty = true; }
+  if (cfgDirty) { try { localStorage.setItem(GH_CONFIG_KEY, JSON.stringify(cfg)); } catch (e) {} }
   const fill = (id, def) => { const el = document.getElementById(id); if (el) el.value = cfg[id] || def; };
   fill('ghRepo', 'syabin/task-data');
-  fill('ghPath', 'data/task-data.json');
+  fill('ghPath', 'TaskManager/task-data.json');
   fill('ghBranch', 'main');
-  fill('ghAttPath', 'data/attachments');
+  fill('ghAttPath', 'TaskManager/attachments');
   const aBox = document.getElementById('ghSyncAttachments');
   if (aBox) aBox.checked = cfg.syncAttachments !== false;
   const autoBox = document.getElementById('ghAutoSync');
@@ -6714,7 +6719,7 @@ function ghPathUrl(cfg, path, query) {
 
 // 单个附件的仓库路径：<附件根>/<临时事项ID>/<文件名>；交付件附件挂在 delivery/ 子目录下避免混淆
 function ghAttachmentPath(cfg, itemId, fileName, kind) {
-  const root = String(cfg.attPath || 'data/attachments').replace(/\/+$/, '');
+  const root = String(cfg.attPath || 'TaskManager/attachments').replace(/\/+$/, '');
   return kind === 'delivery' ? `${root}/delivery/${itemId}/${fileName}` : `${root}/${itemId}/${fileName}`;
 }
 
@@ -6805,7 +6810,7 @@ async function ghBlobSha(bytes) {
 
 // 一次请求列出远端附件清单（path -> blob sha）；truncated 时返回 null 表示需降级
 async function ghListRemoteAttachments(cfg) {
-  const root = String(cfg.attPath || 'data/attachments').replace(/^\/+|\/+$/g, '');
+  const root = String(cfg.attPath || 'TaskManager/attachments').replace(/^\/+|\/+$/g, '');
   if (!root) return null;
   let tree;
   try {
